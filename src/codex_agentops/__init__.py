@@ -1,3 +1,3 @@
-"""Version-pinned UC Skills, Agent Registry, and MLflow observability."""
+"""aops v2."""
 
-__version__ = "1.3.0"
+__version__ = "2.0.0.dev0"
