@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS __SCHEMA__.agents (
   agent_type STRING NOT NULL COMMENT '에이전트 유형. skill-based-agent | code-based-agent | genie-agent (build_type에서 정해짐)',
   build_type STRING NOT NULL COMMENT '만드는 방식. skill | code | no-code (SPEC build_type)',
   serving_type STRING NOT NULL COMMENT '서빙 방식. apps | job | se | genie (SPEC serving_type)',
-  origin STRING NOT NULL COMMENT '출처. databricks | innohub (SPEC origin)',
+  origin STRING NOT NULL COMMENT '출처. 에이전트를 만든 플랫폼이나 조직을 적는다 (SPEC origin). 예: databricks, 사내 개발 플랫폼 이름',
   owner STRING NOT NULL COMMENT '담당자 이메일 (SPEC owner)',
   owner_group STRING NOT NULL COMMENT '담당 조직 (SPEC owner_group)',
   service_criticality STRING NOT NULL COMMENT '서비스 중요도. 상 | 중 | 하 (SPEC service_criticality)',
@@ -190,7 +190,7 @@ ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_type_ck CHECK (agent_type IN
 ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_build_type_ck;
 ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_build_type_ck CHECK (build_type IN ('skill', 'code', 'no-code'));
 ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_origin_ck;
-ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_origin_ck CHECK (origin IN ('databricks', 'innohub'));
+ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_origin_ck CHECK (length(trim(origin)) > 0);
 ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_criticality_ck;
 ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_criticality_ck CHECK (service_criticality IN ('상', '중', '하'));
 ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_sensitivity_ck;

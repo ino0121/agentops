@@ -7,8 +7,9 @@ produces the same rows.
 
     python scripts/make_sample_registry.py <archive-output-dir>
 
-Workspace, schema and people come from .env.e2e (AOPS_E2E_SCHEMA, AOPS_E2E_HOST,
-AOPS_E2E_WORKSPACE_ID, AOPS_E2E_DEVELOPER, AOPS_E2E_APPROVER). Agent sources are the
+Workspace, schema, people and the owner group come from .env.e2e (AOPS_E2E_SCHEMA,
+AOPS_E2E_HOST, AOPS_E2E_WORKSPACE_ID, AOPS_E2E_DEVELOPER, AOPS_E2E_APPROVER,
+AOPS_E2E_OWNER_GROUP). Agent sources are the
 v1 samples and the Agent Bricks demo checked out next to this repository. The generated
 SQL contains those values, so it is not committed.
 """
@@ -40,6 +41,7 @@ HOST = ENV["AOPS_E2E_HOST"]
 WORKSPACE_ID = ENV["AOPS_E2E_WORKSPACE_ID"]
 DEVELOPER = ENV["AOPS_E2E_DEVELOPER"]
 APPROVER = ENV["AOPS_E2E_APPROVER"]
+OWNER_GROUP = ENV["AOPS_E2E_OWNER_GROUP"]
 NAMESPACE = uuid.UUID("6f1c3a52-6d0e-4c49-9a59-2f5a3c1b7e01")
 
 CODE_AGENT_SPEC = """---
@@ -50,7 +52,7 @@ build_type: code
 serving_type: apps
 origin: databricks
 owner: __DEVELOPER__
-owner_group: AI-CoE
+owner_group: __OWNER_GROUP__
 service_criticality: 하
 data_sensitivity: 내부
 security_level: 일반
@@ -178,7 +180,7 @@ def main() -> int:
     built = {}
     for agent_id, root in SOURCES.items():
         if agent_id == "agentops-code":
-            spec_text = CODE_AGENT_SPEC.replace("__DEVELOPER__", DEVELOPER)
+            spec_text = CODE_AGENT_SPEC.replace("__DEVELOPER__", DEVELOPER).replace("__OWNER_GROUP__", OWNER_GROUP)
             data, sums = archive(root, code_files(root), {"SPEC.md": spec_text.encode()})
         else:
             spec_text = (root / "SPEC.md").read_text(encoding="utf-8").replace("owner@example.com", DEVELOPER)
