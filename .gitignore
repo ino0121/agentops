@@ -11,4 +11,7 @@ build/
 mlruns/
 **/.runtime/
 **/.aops/
-docs/
+.env*
+!.env*.example
+# 생성물: .env.e2e의 워크스페이스·사람 정보가 들어간다
+bundles/registry/sample_data.sql
