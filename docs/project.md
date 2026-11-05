@@ -21,6 +21,7 @@ my-agent/
 │   ├── questions.yaml    배치 질문
 │   └── datasets/         정답이 있는 평가 데이터
 ├── memory/               장기 메모리 (Markdown, 승인된 항목만)
+├── genie/agent.json      (노코드) Genie Agent 정의 (Databricks에서 가져온 것)
 ├── AGENTS.md  CLAUDE.md  .codex/  .claude/  .agents/skills/
 │                         하네스 프로젝트 설정 (aops가 aops.toml에서 만든다)
 ├── agent.toml            (dbx) Agent Bricks 프로젝트 선언
