@@ -117,7 +117,7 @@ aops memory forget <id>
 ```
 
 - 하네스가 제안한 메모리 변경을 보고 승인(`accept`)하거나 지웁니다(`forget`). 승인한 항목만 장기 메모리가 됩니다(`[memory] review_writes`).
-- local: `memory/`의 Markdown이 정본이고, 검색은 SQLite로 합니다.
+- local: `memory/`에 Markdown으로 저장하고, 검색은 SQLite로 합니다.
 - dbx: Agent memory stores에 저장하고, 저장소 단위로 권한을 줍니다.
 
 ### `aops add` · `remove`

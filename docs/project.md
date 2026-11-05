@@ -8,7 +8,7 @@
 my-agent/
 ├── pyproject.toml        aops 버전 고정 (uv 프로젝트)
 ├── uv.lock               aops + 하네스 + 상위 SDK의 정확한 버전
-├── aops.toml             프로젝트 정의의 정본
+├── aops.toml             프로젝트 정의 (모든 설정의 기준)
 ├── SPEC.md               에이전트 정보 (등록할 때 쓰는 15개 필드)
 ├── agent/
 │   ├── instructions.md   하네스 공통 지시
@@ -20,7 +20,7 @@ my-agent/
 ├── evals/
 │   ├── questions.yaml    배치 질문
 │   └── datasets/         정답이 있는 평가 데이터
-├── memory/               장기 메모리 (Markdown 정본, 승인된 항목만)
+├── memory/               장기 메모리 (Markdown, 승인된 항목만)
 ├── AGENTS.md  CLAUDE.md  .codex/  .claude/  .agents/skills/
 │                         하네스 프로젝트 설정 (aops가 aops.toml에서 만든다)
 ├── agent.toml            (dbx) Agent Bricks 프로젝트 선언
