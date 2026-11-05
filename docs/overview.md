@@ -2,13 +2,28 @@
 
 [README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md)
 
+## 에이전트 3종
+
+세 종류 에이전트를 같은 검증(Lakeflow Job), 같은 레지스트리(`agent_type`), 같은 승인·배포·운영 흐름으로 관리합니다.
+
+| 종류 | 누가 | 만드는 것 | 배포·운영 |
+| --- | --- | --- | --- |
+| 스킬 기반 | 누구나 | 지시 · `SKILL.md` | Agent Runtime, Unity Gateway Skills 게시 |
+| 코드 기반 | AI 개발자 | LangGraph · OpenAI Agents SDK | Agent Runtime (AgentKit) |
+| 노코드 | 데이터 실무자 | Genie Agent | 대상 워크스페이스의 Genie Agent |
+
+- 세 종류 모두 aops가 관리합니다. 스킬·코드 에이전트는 aops 프로젝트에서 만들고 하네스나 `agentbricks dev`로 실행합니다.
+- 노코드 에이전트는 aops가 Genie API로 새로 만들거나, Genie 화면에서 만든 것을 목록에서 골라 가져옵니다.
+- local 에디션은 스킬 기반만 씁니다. 코드·노코드는 Databricks가 필요해 dbx 에디션부터 씁니다.
+- omni 에디션은 Omnigent UI에서 일합니다. aops는 화면·버튼을 Omnigent UI에 임베딩하거나, Omnigent 코드(Apache-2.0)를 확장해 넣습니다.
+
 ## 개발부터 운영까지
 
 1~4단계는 자유롭게 쓰고, 5단계 검증부터 관리자 정책을 검사합니다. (dbx 에디션 기준)
 
 | 단계 | 하는 일 | Databricks 기능 | 명령 |
 | --- | --- | --- | --- |
-| 1. 만들기 | 프로젝트·개발 화면 | Agent Bricks, Unity Gateway | `init` `dev` |
+| 1. 만들기 | 프로젝트·개발 화면 | Agent Bricks, Genie, Unity Gateway | `init` `dev` |
 | 2. 실험 | 구성별 비교 실행 | MLflow tracing, Sandbox | `run` |
 | 3. 세션 | 하네스 간 이어가기 | Agent sessions·memory | `session` |
 | 4. 평가 | 채점·가드레일 시험 | MLflow 평가, 서비스 정책 | `evaluate` |
@@ -49,6 +64,8 @@ Agent Bricks CLI, Unity Gateway Skills, Agent sessions·memory, Sandbox, 서비�
 | | local | dbx | omni |
 | --- | --- | --- | --- |
 | 대상 | 개인 | Databricks 조직 | Omnigent 조직 |
+| 에이전트 | 스킬 기반 | 스킬 · 코드 · 노코드 | dbx와 같음 |
+| 화면 | aops 개발 화면 | aops 개발 화면, console App | Omnigent UI + aops 화면·버튼 |
 | 실행 | 내 PC | 내 PC, Sandbox | Omnigent 세션 |
 | 모델 | 하네스 설정 그대로 | Unity Gateway | Unity Gateway |
 | 기록 | 로컬 MLflow | Databricks MLflow | dbx + Omnigent |

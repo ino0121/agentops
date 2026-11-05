@@ -40,12 +40,18 @@
 ### `aops init`
 
 ```bash
-aops init <name> [--harness claude|codex] [--edition local|dbx|omni] [--no-ui]
+aops init <name> [--type skill|code|no-code] [--harness claude|codex] [--edition local|dbx|omni] [--no-ui]
+aops init <name> --type no-code --genie <space-id>
 ```
 
 - 프로젝트 폴더를 만들고 `uv sync`로 aops와 하네스를 설치합니다.
 - 하네스 프로젝트 설정을 만듭니다. 이 폴더에서 `claude`·`codex`를 직접 실행해도 aops 설정과 기록이 적용됩니다. 하네스에서 이 폴더와 hook을 신뢰로 승인해야 하고, 회사 관리 설정이 프로젝트 hook을 막지 않아야 합니다.
 - 예시 질문 3개와 기본 가드레일 규칙을 넣고, 끝나면 `aops dev`를 엽니다. `--no-ui`면 열지 않습니다.
+- `--type`: 에이전트 종류입니다. `SPEC.md`의 `build_type`에 기록됩니다.
+  - `skill`(기본): 지시와 `SKILL.md`. 모든 에디션
+  - `code`: Agent Bricks 프로젝트(LangGraph·OpenAI Agents SDK). dbx 이상
+  - `no-code`: Genie Agent. dbx 이상. `--genie`가 없으면 워크스페이스의 Genie Agent 목록에서 고르거나 새로 만듭니다(Genie API)
+- `--genie <space-id>`: 그 Genie Agent의 정의를 가져와 `genie/agent.json`으로 둡니다. 이후 Genie 화면에서 고친 내용은 `aops dev`가 다시 가져옵니다.
 - dbx: Agent Bricks 프로젝트(`agent.toml`, `runtime/`)와 Unity Catalog 이름·Gateway 기본값을 함께 만듭니다.
 - omni: 같은 정의로 Omnigent 에이전트 YAML을 만듭니다.
 
@@ -167,8 +173,8 @@ aops validate [--local]
 - 커밋된 소스만 검사합니다. 커밋하지 않은 변경이 있으면 거부합니다.
 - 후보 소스와 `uv.lock`을 묶어 UC Volume의 검증 대기 위치에 올리고, validate Lakeflow Job(서버리스)을 실행합니다. 올린 소스로 검사하므로 내 PC 상태와 무관합니다.
 - 검사 단계 (항목과 기준은 [관리자 정책](registry.md#관리자-정책)에서 옵니다):
-  1. **형식:** `[release]` 필수 항목, `SPEC.md`, `agent.toml`, 스킬 형식, 도구 권한, 허용된 Model service·MCP, 비밀값·금지 파일, 에이전트 서버 종류
-  2. **평가:** `[release] evals` 데이터셋을 채점해 정책의 최소 점수와 비교
+  1. **형식:** `[release]` 필수 항목, `SPEC.md`, `agent.toml`, 스킬 형식, 도구 권한, 허용된 Model service·MCP, 비밀값·금지 파일, 에이전트 서버 종류. 노코드는 Genie 정의의 테이블·지시가 정책에 맞는지
+  2. **평가:** `[release] evals` 데이터셋을 채점해 정책의 최소 점수와 비교. 노코드는 Genie benchmark 평가로 채점
   3. **가드레일:** `[release.guardrails]`에 정책이 요구하는 층·규칙이 있는지, 레드팀 통과율
   4. **호환:** `uv.lock`의 하네스·SDK 버전이 허용 범위와 호환표에 있는지
   5. **기록:** MLflow run과 Delta `validations`에 단계별 결과, 소스 해시, 정책 버전을 남김
@@ -197,6 +203,7 @@ aops deploy --dev
 - **요청:** Delta `deploy_requests`에 승인 대기로 남깁니다. 검증할 때의 정책 버전이 지금 정책과 다르면 다시 `validate`하라고 안내합니다.
 - **승인:** console App에서 승인 그룹(`[dbx] approvers`)이 합니다. 요청자 본인은 승인할 수 없습니다.
 - **배포:** 배포 Job(서비스 주체 실행)이 승인 기록을 다시 확인하고 `agentbricks deploy`로 Agent Runtime(Databricks Apps)에 배포합니다. 앱 이름은 `agent-bricks-<name>`입니다.
+- **노코드:** 배포 Job이 등록된 Genie 정의를 대상 워크스페이스의 Genie Agent로 만들거나 고칩니다. 카탈로그 이름이 다르면 바꿔 넣습니다.
 - **에이전트 서버:** AgentKit `DurableAgentServer`(`/api/invocations`)입니다. 요청 ID로 중복 실행을 막고, 동기·스트리밍·백그라운드 호출을 같은 실행으로 다룹니다. Runtime Store(Lakebase)가 실행 상태를 보관해 중단된 실행을 복구합니다.
 - **가드레일:** 개발 중 스위치(`[guardrails]`)가 아니라 배포 구성(`[release.guardrails]`)이 배포 패키지에 들어갑니다. Unity Gateway 정책 점검 결과는 `deployments`에 남습니다.
 - **운영 기록:** 배포된 에이전트에 MLflow tracing과 Apps telemetry를 켭니다. 정책에 따라 켜지는 조직 서비스의 기록이라, 에이전트를 쓰는 최종 사용자 쪽에서는 끌 수 없습니다.
