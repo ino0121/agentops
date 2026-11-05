@@ -13,5 +13,7 @@ mlruns/
 **/.aops/
 .env*
 !.env*.example
-# 생성물: .env.e2e의 워크스페이스·사람 정보가 들어간다
-bundles/registry/sample_data.sql
+# 로컬 전용 폴더. 공개하지 않는다
+/internal/
+# 잠금 파일은 아직 올리지 않는다 (만든 환경의 패키지 저장소 주소가 들어간다)
+uv.lock
