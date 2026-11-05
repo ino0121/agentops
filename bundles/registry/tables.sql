@@ -1,5 +1,5 @@
 -- aops 레지스트리·승인 테이블
--- 설계: docs/ARCHITECTURE.md 9장 "레지스트리·승인 테이블", "관리자 정책 (배포 형식)"
+-- 조직이 함께 쓰는 에이전트 레지스트리, 검증 결과, 배포 요청·승인, 배포·운영 지정 이력, 관리자 정책.
 -- 값 형식은 현재 aops 코드(v1 manifest.py·registry.py·governance.py)를 따른다.
 --   SPEC 항목: SPEC.md 15개 필드와 허용 값 (예: data_sensitivity 공개|내부|대외비|개인정보)
 --   ID: uuid4().hex (32자리 16진수), 해시: sha256 16진수 64자리, 사람: 계정 이메일, 시각: UTC
