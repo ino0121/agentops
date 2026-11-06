@@ -37,7 +37,7 @@ config_version = 1
 
 [project]
 name = "price-helper"
-edition = "local"              # local | dbx | omni
+edition = "local"              # local | dbx | omni | custom
 
 [agent]
 harness = "claude"             # 기본 하네스: claude | codex
@@ -88,7 +88,7 @@ experiment = "/Users/<me>/aops/price-helper"   # 개발 기록은 기본으로 �
 gateway = true                 # 모델 호출을 Unity Gateway로 (권장)
 registry = "main.aops"         # 레지스트리·승인 테이블 스키마 (조직 공통)
 validate_job = "aops-validate"
-console_app = "aops-console"
+server_app = "aops-server"
 approvers = "group:agent-approvers"   # 배포 승인 그룹. 요청자 본인은 승인할 수 없다
 ```
 
