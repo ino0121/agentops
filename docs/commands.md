@@ -2,7 +2,7 @@
 
 [README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md)
 
-명령은 16개입니다. 개발자가 매일 쓰는 것은 개발 명령 7개이고, 등록·배포는 dbx·omni에서만, `admin`은 관리자만 씁니다.
+명령은 17개입니다. 개발자가 매일 쓰는 것은 개발 명령 7개이고, 등록·배포는 dbx 이상에서만, `admin`은 관리자만 씁니다. custom 에디션은 모든 명령이 dbx와 같고, 같은 기능을 `aops serve` API로도 씁니다.
 
 **개발 (모든 에디션, 강제 없음)**
 
@@ -34,13 +34,14 @@
 | [`aops doctor`](#aops-doctor) | 설치·버전·설정 점검 | ● | ● | ● |
 | [`aops harness`](#aops-harness) | 하네스 설치·버전 관리 | ● | ● | ● |
 | [`aops admin`](#aops-admin) | 조직 공통 자원 준비, 관리자 정책 | – | ● | ● |
+| [`aops serve`](#aops-serve) | aops API 서버 (custom: Custom Front 연결) | – | ● | ● |
 
 ## 개발
 
 ### `aops init`
 
 ```bash
-aops init <name> [--type skill|code|no-code] [--harness claude|codex] [--edition local|dbx|omni] [--no-ui]
+aops init <name> [--type skill|code|no-code] [--harness claude|codex] [--edition local|dbx|omni|custom] [--no-ui]
 aops init <name> --type no-code --genie <space-id>
 ```
 
@@ -146,7 +147,7 @@ aops remove skill|tool|mcp <name>
 1. `aops validate`: 후보 소스 업로드 → Lakeflow Job이 관리자 정책 검사 → `validations`
 2. `aops register --version 1.2.0`: 통과한 소스만 등록 → `agent_versions`, UC 모델 버전, Unity Gateway Skills 게시
 3. `aops deploy --version 1.2.0`: 배포 요청 → `deploy_requests` (승인 대기)
-4. console App: 승인 그룹이 [승인]·[반려] → `approvals`
+4. console 화면: 승인 그룹이 [승인]·[반려] → `approvals`
 5. 배포 Job: 승인 기록 재확인 → `agentbricks deploy` → `deployments`
 6. `aops promote 1.2.0`: 운영 버전 지정 → `production`
 
@@ -157,7 +158,7 @@ aops configure [--edition dbx|omni] [--dry-run]
 ```
 
 - Databricks CLI 프로필, 카탈로그·스키마·Experiment·Unity Gateway Model service·SQL warehouse를 확인해 `aops.toml [dbx]`에 저장합니다.
-- 조직 공통 레지스트리·validate Job·console App이 있는지와 내 권한(읽기·요청·승인)을 확인합니다.
+- 조직 공통 레지스트리·validate Job·aops 서버가 있는지와 내 권한(읽기·요청·승인)을 확인합니다.
 - 프리뷰(Sandbox, Unity Gateway Skills, Agent memory, 서비스 정책 등) 상태를 확인하고, 꺼진 기능은 local 구현을 쓰도록 `[providers]`를 제안합니다.
 - **에디션 이전:** local 프로젝트에서 처음 실행하면 데이터를 옮길지 묻습니다. 세션은 Agent sessions로, 메모리는 memory stores로, 평가 기록은 Databricks Experiment로, 평가 데이터는 UC 평가 데이터셋으로 옮깁니다. `--dry-run`은 이전 계획과 옮길 수 없는 항목만 보여 줍니다. 옮기지 않아도 dbx 기능은 쓸 수 있습니다.
 - omni: Omnigent에 로그인하고, dbx 프로젝트를 omni로 옮깁니다.
@@ -189,7 +190,7 @@ aops register [--version x.y.z]
 
 - 같은 소스 해시로 현재 정책에서 통과한 검증이 있어야 등록됩니다.
 - 검증 대기 위치의 소스 스냅샷을 버전 위치로 옮기고, UC registered model 버전과 MLflow LoggedModel을 만듭니다. 평가와 trace가 같은 model ID로 이어집니다.
-- 스킬을 Unity Gateway Skills로 게시합니다. 팀의 코딩 에이전트는 `ug skills add`로 받아 씁니다.
+- 스킬은 스냅샷과 해시만 남깁니다. 게시는 승인 뒤 `aops promote` 때 합니다.
 - Delta `agents`·`agent_versions`에 소스 해시, git 커밋, 하네스·SDK 버전, UC 모델 버전, 근거 검증을 남깁니다. 버전은 `SPEC.md`의 `agent_version`과 같아야 합니다.
 - omni: Omnigent 에이전트로도 등록합니다.
 
@@ -201,13 +202,13 @@ aops deploy --dev
 ```
 
 - **요청:** Delta `deploy_requests`에 승인 대기로 남깁니다. 검증할 때의 정책 버전이 지금 정책과 다르면 다시 `validate`하라고 안내합니다.
-- **승인:** console App에서 승인 그룹(`[dbx] approvers`)이 합니다. 요청자 본인은 승인할 수 없습니다.
+- **승인:** console 화면에서 승인 그룹(`[dbx] approvers`)이 합니다. 요청자 본인은 승인할 수 없습니다.
 - **배포:** 배포 Job(서비스 주체 실행)이 승인 기록을 다시 확인하고 `agentbricks deploy`로 Agent Runtime(Databricks Apps)에 배포합니다. 앱 이름은 `agent-bricks-<name>`입니다.
 - **노코드:** 배포 Job이 등록된 Genie 정의를 대상 워크스페이스의 Genie Agent로 만들거나 고칩니다. 카탈로그 이름이 다르면 바꿔 넣습니다.
 - **에이전트 서버:** AgentKit `DurableAgentServer`(`/api/invocations`)입니다. 요청 ID로 중복 실행을 막고, 동기·스트리밍·백그라운드 호출을 같은 실행으로 다룹니다. Runtime Store(Lakebase)가 실행 상태를 보관해 중단된 실행을 복구합니다.
 - **가드레일:** 개발 중 스위치(`[guardrails]`)가 아니라 배포 구성(`[release.guardrails]`)이 배포 패키지에 들어갑니다. Unity Gateway 정책 점검 결과는 `deployments`에 남습니다.
 - **운영 기록:** 배포된 에이전트에 MLflow tracing과 Apps telemetry를 켭니다. 정책에 따라 켜지는 조직 서비스의 기록이라, 에이전트를 쓰는 최종 사용자 쪽에서는 끌 수 없습니다.
-- **`--dev`:** 승인 없이 본인 이름이 붙은 앱(`agent-bricks-dev-<user>-<name>`)으로 배포합니다. 세션·메모리처럼 배포해야만 시험할 수 있는 기능을 위한 개인 시험 배포입니다. 운영 후보로 남지 않고, `promote` 대상이 아니며, console App의 운영 목록에 나오지 않습니다.
+- **`--dev`:** 승인 없이 본인 이름이 붙은 앱(`agent-bricks-dev-<user>-<name>`)으로 배포합니다. 세션·메모리처럼 배포해야만 시험할 수 있는 기능을 위한 개인 시험 배포입니다. 운영 후보로 남지 않고, `promote` 대상이 아니며, console 화면의 운영 목록에 나오지 않습니다.
 - omni: Omnigent 관리형 에이전트로 게시하고 정책을 함께 넣습니다.
 
 ### `aops promote`
@@ -219,6 +220,7 @@ aops promote <version> [--expected-version <현재 운영 버전>]
 - 통과한 검증과 완료된 배포가 있는 버전만 운영으로 지정합니다. Delta `production`과 UC 모델 별칭을 한 번에 바꿉니다.
 - `--expected-version`: 현재 운영 버전을 확인한 뒤 바꿉니다(동시 변경 방지).
 - 되돌리기도 이 명령으로 합니다. 과거에 운영이었던 버전을 지정하면 됩니다.
+- 스킬 기반은 이때 그 버전의 스킬을 Unity Gateway Skills에 게시합니다. 사용자는 각자 하네스에서 `ug skills add`로 받아 씁니다. 되돌리면 이전 버전의 스킬을 다시 게시합니다.
 
 ## 운영·관리
 
@@ -229,7 +231,7 @@ aops monitor [--me | --all] [--watch] [--web]
 aops monitor dashboard
 ```
 
-개인 사용자와 관리자가 사용량·예산과 운영 중인 에이전트를 한곳에서 봅니다. 주 화면은 console App의 Monitor 화면이고(`--web`), CLI는 같은 데이터를 표로 보여 줍니다(`--watch`로 주기 갱신).
+개인 사용자와 관리자가 사용량·예산과 운영 중인 에이전트를 한곳에서 봅니다. 주 화면은 console 화면의 Monitor이고(`--web`), CLI는 같은 데이터를 표로 보여 줍니다(`--watch`로 주기 갱신).
 
 | 보기 | 개인 (`--me`, 기본) | 관리자 (`--all`) |
 | --- | --- | --- |
@@ -281,8 +283,24 @@ aops admin policy show|diff
 - `setup`: 조직 공통 자원을 번들(`databricks.yml`)로 한 번 배포합니다.
   - 레지스트리 스키마와 테이블
   - validate Job, 배포 Job (서버리스, 서비스 주체 실행)
-  - console App과 Apps telemetry 대상 스키마
+  - aops 서버(console 화면 + API, Databricks App)와 Apps telemetry 대상 스키마
   - monitor용 뷰
   - 승인 태그 정책 (governed tags)
+- custom이면 Custom Front가 쓸 그룹·서비스 주체에도 aops 서버 앱의 `CAN USE`를 줍니다 (앱을 따로 만들지 않습니다).
 - 권한 부여는 미리 보여 주고 `--apply`일 때만 실행합니다.
 - `policy`: 관리자 정책을 올리고 버전을 관리합니다.
+
+### `aops serve`
+
+```bash
+aops serve [--host 127.0.0.1] [--port 8000] [--cors-origin <url>]
+```
+
+dbx 기능을 HTTP API 서버로 엽니다. 조직의 웹·서비스가 자기 화면에서 aops를 쓰게 하는 custom 에디션의 서버입니다. 개발 화면과 aops 서버의 console 화면도 같은 서버 코드입니다.
+
+- **API:** REST `/api/v1`과 실행 스트림 SSE(AG-UI 이벤트)입니다. OpenAPI 문서는 `/api/v1/openapi.json`입니다. CLI 명령과 API는 같은 기능입니다.
+- **위치:** 조직 서버나 컨테이너에서 이 명령으로 띄웁니다. Databricks App(aops 서버)은 `aops admin setup`이 배포합니다.
+- **인증:** Databricks OAuth 토큰(`Authorization: Bearer`)만 받습니다. 사람 권한이 필요한 조회는 그 사람 권한으로, 레지스트리 기록은 서비스 주체로 합니다.
+- **실행:** 하네스는 세션마다 Databricks Sandbox에서 돕니다. 프로젝트는 Workspace 폴더(Git 폴더)나 UC Volume에 둡니다.
+- 화면 없이 API만 엽니다. 요청·응답 형식은 `/api/v1/docs`에서 보고, 명령 ↔ API 대응은 `GET /api/v1/meta/commands`로 받습니다.
+- `--cors-origin`: 다른 도메인의 브라우저 화면이 직접 부를 때 허용할 주소입니다. 조직 서버에서 띄울 때만 씁니다.

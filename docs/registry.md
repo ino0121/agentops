@@ -14,18 +14,18 @@
 | 가드레일 | 데이터 등급별 필수 층·규칙·Gateway 정책, 레드팀 최소 통과율 | validate, 배포 Job |
 | 평가 | 필수 평가 데이터셋, 최소 점수 | validate |
 | 운영 기록 | 배포 에이전트의 MLflow tracing·Apps telemetry | 배포 Job |
-| 승인 | 승인 그룹, 필요한 승인 수, 자기 승인 금지 | deploy, console App |
+| 승인 | 승인 그룹, 필요한 승인 수, 자기 승인 금지 | deploy, console 화면 |
 | 재검증 | 정책이 바뀌면 이전 정책의 검증으로 배포할 수 있는지 | deploy |
 
 - 개발 단계의 기록·가드레일·평가 여부는 정책 항목이 될 수 없습니다. 정책은 등록·배포되는 결과물만 봅니다.
 - 정책이 없으면 기본 정책(에이전트 서버 종류, 커밋된 소스, 비밀값 검사, 승인 1명)을 씁니다.
 
-## console App
+## aops 서버
 
-조직이 함께 쓰는 Databricks App입니다. 따로 명령이 없고, `aops admin setup`이 배포하며 `aops monitor --web`이 엽니다.
+조직이 함께 쓰는 Databricks App 하나입니다. console 화면과 aops API(`/api/v1`)를 함께 엽니다. `aops admin setup`이 배포하고, `aops monitor --web`이 console 화면을 엽니다. Omnigent UI와 Custom Front도 이 API에 붙습니다.
 
 - **레지스트리:** 에이전트, 버전, 검증 결과, 배포 위치
-- **배포 요청·승인:** 승인자에게만 [승인]·[반려] 버튼이 보입니다. 배포 승인·반려는 이 화면에서만 합니다
+- **배포 요청·승인:** 승인자에게만 [승인]·[반려] 버튼이 보입니다. 배포 승인·반려는 aops API의 승인 경로로만 하고, 기본 화면이 console 화면입니다. custom 에디션에서는 Custom Front가 같은 API를 부릅니다
 - **모니터링:** `aops monitor`와 같은 데이터
 - **운영 지정 이력**
 
@@ -40,7 +40,7 @@
 | `validations` | 검증 결과 (정책 버전, 점수, 단계별 결과) | validate Job |
 | `agent_versions` | 등록된 버전과 소스 스냅샷 경로·해시 | `register` |
 | `deploy_requests` | 배포 요청과 상태 | `deploy`, 배포 Job |
-| `approvals` | 승인·반려 이력 (추가만) | console App |
+| `approvals` | 승인·반려 이력 (추가만) | aops 서버 |
 | `deployments` | 배포 결과 | 배포 Job |
 | `production` | 운영 버전 지정·되돌림 이력 | `promote` |
-| `agent_status` (뷰) | 에이전트별 최신 버전, 운영 버전, 최근 검증, 승인 대기 수 | console App |
+| `agent_status` (뷰) | 에이전트별 최신 버전, 운영 버전, 최근 검증, 승인 대기 수 | aops 서버 |
