@@ -34,6 +34,7 @@ aops serve                 # aops API 서버 (custom)
 - [명령어](docs/commands.md): 전체 명령과 옵션
 - [프로젝트 폴더](docs/project.md): 폴더 구조와 `aops.toml`
 - [레지스트리·승인](docs/registry.md): 관리자 정책, aops 서버, 테이블
+- [API](docs/api.md): `aops serve`의 HTTP API와 명령 대응표
 
 ## 라이선스
 
