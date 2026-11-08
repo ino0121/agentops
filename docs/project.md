@@ -21,7 +21,6 @@ my-agent/
 │   ├── questions.yaml    배치 질문
 │   └── datasets/         정답이 있는 평가 데이터
 ├── memory/               장기 메모리 (Markdown, 승인된 항목만)
-├── genie/agent.json      (노코드) Genie Agent 정의 (Databricks에서 가져온 것)
 ├── AGENTS.md  CLAUDE.md  .codex/  .claude/  .agents/skills/
 │                         하네스 프로젝트 설정 (aops가 aops.toml에서 만든다)
 ├── agent.toml            (dbx) Agent Bricks 프로젝트 선언
@@ -71,7 +70,7 @@ name = "codex-guard-off"
 harness = "codex"
 rules = "off"
 
-[release]                      # 등록·배포할 구성. dbx·omni에서 validate가 관리자 정책으로 검사한다
+[release]                      # 등록·배포할 구성. dbx·omni에서 배포 요청 전에 validate가 관리자 정책으로 검사한다
 spec = "SPEC.md"
 evals = "evals/datasets/main"
 
@@ -93,3 +92,5 @@ approvers = "group:agent-approvers"   # 배포 승인 그룹. 요청자 본인�
 ```
 
 `AGENTS.md`·`.claude/` 같은 하네스 설정은 `aops.toml`에서 만들어지는 생성물입니다. `aops.toml`이 바뀌면 다음 aops 명령이 다시 만들고, 사람이 직접 고친 부분이 있으면 덮어쓰기 전에 차이를 보여 주고 묻습니다. 사용자가 지우거나 끈 hook은 다시 넣지 않습니다.
+
+노코드 에이전트(Genie Agent)는 이 폴더에 정의를 두지 않습니다. Genie 화면에서 만들고 고치며, aops는 배포 요청 때 정의를 스냅샷으로 떠서 검사하고 배포합니다.
