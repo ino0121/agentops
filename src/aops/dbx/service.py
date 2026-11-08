@@ -239,7 +239,7 @@ class Service:
                           "src": f"agent/skills/{alias}"})
         self.event(agent_id, new_version, "register", caller.email,
                    {"artifact_path": path, "skills": published, "first": not existing})
-        return {**self.version(agent_id, new_version), "skills": [{"skill_alias": a, "uc_name": u} for a, u in published.items()]}
+        return {**self.version(agent_id, new_version), "skills": self.version_skills(agent_id, new_version)}
 
     # ── UC skills ───────────────────────────────────────────────────────────
 

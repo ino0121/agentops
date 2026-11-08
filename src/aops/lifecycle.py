@@ -35,6 +35,9 @@ def cmd_register(args: argparse.Namespace) -> int:
                                  "archive", f"{project.name}.zip", archive.data)
     _say(f"등록: {project.name} {row['version']} (상태 {row['status']})")
     _say(f"  볼륨: {row['artifact_path']}")
+    for skill in row.get("skills") or []:
+        where = skill.get("uc_name") or "UC Skill 게시 건너뜀"
+        _say(f"  스킬 {skill['skill_alias']} → UC Skill {where}")
     return 0
 
 
@@ -89,7 +92,7 @@ def _report_gate(gate: dict[str, Any]) -> None:
     if decision == "validating":
         _say("  Gate: validate Job으로 검사 중…")
     elif decision == "pending_approval":
-        _say("  Gate 통과 → 승인 대기 (console 화면)")
+        _say("  Gate 통과 → " + ("정책 자동 승인 중…" if gate["approval_mode"] == "auto" else "승인 대기 (console 화면)"))
     elif decision == "approved" and deployment == "running":
         if gate.get("validation"):
             _print_steps(gate["validation"])

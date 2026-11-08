@@ -14,9 +14,10 @@ from fastapi.sse import EventSourceResponse
 from pydantic import BaseModel, Field
 
 from ..common import DBX, Page, command, pending, todo
+from ...dbx.sql import loads
 from ..dbx import caller_of, service_for
 from ..events import ProgressEvent
-from .registry import AgentVersion, Deployment, ValidationRun
+from .registry import AgentVersion, AgentVersionDetail, AgentVersionSkill, Deployment, ValidationRun
 
 router = APIRouter(tags=["검증·등록·배포"])
 
@@ -144,10 +145,11 @@ def register(
     archive: UploadFile = File(description="버전 zip (aops.toml, SPEC.md, agent/…)"),
     version: str | None = Form(None, description="`--version`. 비우면 register가 매긴다 (최초 1.0.0)"),
     bump: Literal["fix", "minor", "major"] | None = Form(None, description="버전을 올리는 폭. 비우면 minor"),
-) -> AgentVersion:
+) -> AgentVersionDetail:
     svc = service_for("aops register")
     row = svc.register(caller_of(request, svc), project_id, archive.file.read(), version, bump)
-    return AgentVersion(**{**row, "created_at": row["registered_at"]})
+    skills = [AgentVersionSkill(**s) for s in row.pop("skills", [])]
+    return AgentVersionDetail(**{**row, "created_at": row["registered_at"], "spec": loads(row.get("spec")) or {}}, skills=skills)
 
 
 @router.post(
