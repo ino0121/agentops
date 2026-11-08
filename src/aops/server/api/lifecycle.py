@@ -9,21 +9,23 @@ from collections.abc import AsyncIterable
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, File, Form, Header, Request, UploadFile
 from fastapi.sse import EventSourceResponse
 from pydantic import BaseModel, Field
 
 from ..common import DBX, Page, command, pending, todo
+from ..dbx import caller_of, service_for
 from ..events import ProgressEvent
 from .registry import AgentVersion, Deployment, ValidationRun
 
 router = APIRouter(tags=["검증·등록·배포"])
 
-GateDecision = Literal["pending_approval", "approved", "rejected", "canceled"]
+GateDecision = Literal["validating", "pending_approval", "approved", "rejected", "canceled"]
 
 
 class ValidationCreate(BaseModel):
     mode: Literal["job", "local"] = Field("job", description="`--local`: 내 PC에서 참고용으로")
+    version: str | None = Field(None, examples=["1.2.0"], description="`--version`: 비우면 마지막 등록 버전")
 
 
 class RegisterRequest(BaseModel):
@@ -73,7 +75,7 @@ class ReleaseGate(BaseModel):
     app_name: str | None = Field(None, examples=["agent-bricks-price-helper"])
     requester: str = Field(examples=["dev@example.com"])
     requested_at: datetime
-    upgrade_type: Literal["initial", "major", "minor", "patch"] = Field(description="요청 시점 운영 버전 대비")
+    upgrade_type: Literal["initial", "major", "minor", "patch", "rollback"] = Field(description="요청 시점 운영 버전 대비")
     validation_policy_mode: Literal["mandatory", "optional", "exempt"]
     approval_mode: Literal["required", "optional", "auto"]
     approval_channel: Literal["console", "external"]
@@ -83,6 +85,9 @@ class ReleaseGate(BaseModel):
     required_approvals: int = Field(examples=[1])
     approvals: int = Field(examples=[0])
     deployment_id: str | None = Field(None, description="승인 뒤 배포 Job이 만든 배포")
+    deployment_status: Literal["running", "succeeded", "failed"] | None = Field(None, description="배포 Job의 진행 상태")
+    decision_reason: str | None = Field(None, description="반려 사유 등")
+    validation_run_id: str | None = Field(None, description="근거 검사 실행")
 
 
 class ReleaseGateDetail(ReleaseGate):
@@ -109,13 +114,16 @@ class ExternalDecision(BaseModel):
 
 
 @router.post("/projects/{project_id}/validations", status_code=202, summary="검증 시작 (관리자 정책)", **command("aops validate", DBX))
-def create_validation(project_id: str, body: ValidationCreate) -> ValidationRun:
-    raise todo("aops validate")
+def create_validation(project_id: str, body: ValidationCreate, request: Request) -> ValidationRun:
+    svc = service_for("aops validate")
+    return ValidationRun(**svc.start_validation(caller_of(request, svc), project_id, body.version))
 
 
 @router.get("/validations/{validation_run_id}", summary="검증 결과 (단계별)", **command(None, DBX, screen="검증 진행 화면"))
-def get_validation(validation_run_id: str) -> ValidationRun:
-    raise todo(None)
+def get_validation(validation_run_id: str, request: Request) -> ValidationRun:
+    svc = service_for(None)
+    caller_of(request, svc)
+    return ValidationRun(**svc.validation(validation_run_id))
 
 
 @router.get(
@@ -131,16 +139,26 @@ async def stream_validation(validation_run_id: str) -> AsyncIterable[ProgressEve
     "/projects/{project_id}/registrations", status_code=201, summary="버전 저장 (최초 1.0.0)",
     **command("aops register", DBX, note="검증을 요구하지 않는다(강제는 deploy 요청의 Gate). 에이전트 볼륨에 버전 zip을 한 번만 쓴다. 스킬은 첫 등록 때 UC Skill을 만든다(소유 aops 서비스 주체, 읽는 사람 없음). 코드는 UC 모델 버전도 만든다. 노코드는 deploy가 성공할 때 자동 등록한다."),
 )
-def register(project_id: str, body: RegisterRequest) -> AgentVersion:
-    raise todo("aops register")
+def register(
+    project_id: str, request: Request,
+    archive: UploadFile = File(description="버전 zip (aops.toml, SPEC.md, agent/…)"),
+    version: str | None = Form(None, description="`--version`. 비우면 register가 매긴다 (최초 1.0.0)"),
+    bump: Literal["fix", "minor", "major"] | None = Form(None, description="버전을 올리는 폭. 비우면 minor"),
+) -> AgentVersion:
+    svc = service_for("aops register")
+    row = svc.register(caller_of(request, svc), project_id, archive.file.read(), version, bump)
+    return AgentVersion(**{**row, "created_at": row["registered_at"]})
 
 
 @router.post(
     "/projects/{project_id}/deploy-requests", status_code=201, summary="운영 반영 요청 (Gate → 승인 → 배포 Job)",
     **command("aops deploy", DBX, note="Gate(검증·평가 결과)를 확인하고 승인을 받으면 배포 Job이 운영 버전을 내보낸다: 노코드 운영용 Genie Agent 복제, 코드 운영 앱 배포, 스킬 레지스트리 상태 운영과 UC Skill 내용. 노코드는 `version` 없이 요청하고 Gate가 개발용 정의를 스냅샷으로 뜬다. 같은 에이전트에 진행 중인 요청이 있으면 409. 되돌리기는 이전 버전을 deploy한다. `dev=true`면 승인 없이 개인 시험 배포를 시작하고 배포를 돌려준다."),
 )
-def deploy(project_id: str, body: DeployRequest) -> ReleaseGate | Deployment:
-    raise todo("aops deploy")
+def deploy(project_id: str, body: DeployRequest, request: Request) -> ReleaseGate | Deployment:
+    svc = service_for("aops deploy")
+    if body.dev:
+        raise todo("aops deploy --dev")
+    return _gate(svc.request_deploy(caller_of(request, svc), project_id, body.version, body.reason))
 
 
 @router.post(
@@ -151,8 +169,11 @@ def deploy(project_id: str, body: DeployRequest) -> ReleaseGate | Deployment:
         "권한의 정본은 플랫폼 권한(UC grants 등)이고, 이력은 agent_events에 남는다."
     )),
 )
-def promote(agent_id: str, body: PromoteRequest) -> list[Grant]:
-    raise todo("aops promote")
+def promote(agent_id: str, body: PromoteRequest, request: Request) -> list[Grant]:
+    from datetime import datetime, timezone
+    svc = service_for("aops promote")
+    at = datetime.now(timezone.utc)
+    return [Grant(**g, at=at) for g in svc.promote(caller_of(request, svc), agent_id, body.principals, body.revoke)]
 
 
 @router.get(
@@ -166,16 +187,21 @@ def list_gates(
 
 
 @router.get("/release-gates/{gate_id}", summary="배포 심사 보기", **command(None, DBX, screen="console 배포 요청·승인"))
-def get_gate(gate_id: str) -> ReleaseGateDetail:
-    raise todo(None)
+def get_gate(gate_id: str, request: Request) -> ReleaseGateDetail:
+    svc = service_for(None)
+    caller_of(request, svc)
+    gate = svc.advance(gate_id)
+    validation = svc.validation(gate["validation_run_id"]) if gate.get("validation_run_id") else None
+    return ReleaseGateDetail(**_gate(gate).model_dump(), validation=ValidationRun(**validation) if validation else None)
 
 
 @router.post(
     "/release-gates/{gate_id}/approve", summary="승인",
     **command(None, DBX, screen="console [승인]", note="승인 그룹만, 요청자 본인은 불가. 필요한 승인 수가 차면 배포 Job이 시작된다."),
 )
-def approve(gate_id: str, body: DecisionBody) -> ReleaseGate:
-    raise todo(None)
+def approve(gate_id: str, body: DecisionBody, request: Request) -> ReleaseGate:
+    svc = service_for(None)
+    return _gate(svc.approve(caller_of(request, svc), gate_id, body.comment))
 
 
 @router.post("/release-gates/{gate_id}/reject", summary="반려", **command(None, DBX, screen="console [반려]"))
@@ -194,3 +220,8 @@ def cancel_gate(gate_id: str) -> ReleaseGate:
 )
 def external_decision(body: ExternalDecision, x_aops_signature: str = Header()) -> Approval:
     raise todo(None)
+
+
+def _gate(row: dict) -> ReleaseGate:
+    return ReleaseGate(**{**row, "required_approvals": int(row.get("required_approvals") or 1),
+                          "approvals": int(row.get("approvals") or 0)})

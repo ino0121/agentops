@@ -1,254 +1,263 @@
--- aops 레지스트리·승인 테이블
--- 조직이 함께 쓰는 에이전트 레지스트리, 검증 결과, 배포 요청·승인, 배포·운영 지정 이력, 관리자 정책.
--- 값 형식은 현재 aops 코드(v1 manifest.py·registry.py·governance.py)를 따른다.
---   SPEC 항목: SPEC.md 15개 필드와 허용 값 (예: data_sensitivity 공개|내부|대외비|개인정보)
---   ID: uuid4().hex (32자리 16진수), 해시: sha256 16진수 64자리, 사람: 계정 이메일, 시각: UTC
---   구조가 있는 상세 값: JSON 문자열 (*_json)
+-- aops 레지스트리·승인 테이블 (확정 구성)
+-- 세 종류 에이전트(스킬·코드·노코드)의 버전, 검사, 배포 심사·승인, 배포, 운영 포인터, 권한·가져오기 이력, 관리자 정책.
+-- 값 규약: 열거형은 영문 소문자 코드(한글 라벨은 화면·뷰), 고정 구조는 STRUCT, 가변 구조는 VARIANT,
+--          ID는 uuid4().hex, 해시는 sha256 16진수 64자리, 사람은 계정 이메일(서비스 주체는 application ID), 시각은 UTC.
+-- 쓰기는 aops 서비스 주체(aops 서버, validate·배포 Job)만 한다. 사람에게는 조회 권한만 준다.
 -- __SCHEMA__ 는 실행할 때 <catalog>.<schema> 로 바뀐다. 다시 실행해도 된다 (IF NOT EXISTS).
 -- 모든 테이블은 catalog commits를 켠다. 여러 테이블을 BEGIN ATOMIC 한 트랜잭션으로 바꾸려면 필요하다.
--- PRIMARY KEY·FOREIGN KEY는 Unity Catalog 정보용 제약이라 강제되지 않는다. 허용 값은 CHECK로 강제한다.
+-- PRIMARY KEY는 Unity Catalog 정보용 제약이라 강제되지 않는다. 허용 값은 CHECK로 강제한다.
 
 CREATE TABLE IF NOT EXISTS __SCHEMA__.policies (
   policy_version INT NOT NULL COMMENT '정책 버전. 1부터 1씩 늘어난다',
-  status STRING NOT NULL COMMENT '정책 상태. active(현재 적용, 하나만) | retired(이전 정책)',
-  schema_version INT NOT NULL COMMENT '정책 파일(policy.toml) 형식 버전',
-  approver_group STRING NOT NULL COMMENT '배포를 승인할 수 있는 워크스페이스 그룹 이름',
-  approvals_required INT NOT NULL COMMENT '배포 한 건에 필요한 승인 수',
-  self_approval_allowed BOOLEAN NOT NULL COMMENT '요청자·담당자 본인 승인 허용 여부. 운영은 false',
-  allowed_servers ARRAY<STRING> NOT NULL COMMENT '허용하는 에이전트 서버 종류. 예: agentbricks (DurableAgentServer)',
-  allowed_model_services ARRAY<STRING> NOT NULL COMMENT '에이전트가 쓸 수 있는 Gateway Model Service 이름 목록',
-  min_correctness DOUBLE COMMENT 'validate 평가의 정답성 최소 점수 (0~1). SPEC success_criteria가 더 높으면 그 값을 쓴다',
-  min_redteam_pass_rate DOUBLE COMMENT '레드팀 시험 최소 통과율 (0~1)',
-  required_guardrails_json STRING COMMENT '데이터 민감도별 필수 가드레일 (JSON). 예: {"대외비": ["kr-pii", "jailbreak"]}',
-  body STRING NOT NULL COMMENT '정책 원문 (policy.toml 내용 그대로)',
-  created_by STRING NOT NULL COMMENT '정책을 올린 관리자 이메일',
+  status STRING NOT NULL COMMENT '정책 상태. active(지금 적용, 하나만) | retired(이전 정책)',
+  body VARIANT NOT NULL COMMENT '정책 내용. 검증 방식(validation_mode), 승인 방식(approval_mode), 승인 그룹, 보안 등급 등',
+  created_by STRING NOT NULL COMMENT '정책을 올린 관리자',
   created_at TIMESTAMP NOT NULL COMMENT '정책을 올린 시각 (UTC)',
   CONSTRAINT policies_pk PRIMARY KEY (policy_version)
 )
-COMMENT '관리자 정책(배포 형식). aops admin policy set이 새 버전을 추가하고, validate·register·배포 Job이 active 정책을 읽는다'
+COMMENT '관리자 정책(배포 형식). aops admin policy가 새 버전을 추가하고, aops 서버·validate·배포 Job이 active 정책을 읽는다'
 TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
 CREATE TABLE IF NOT EXISTS __SCHEMA__.agents (
-  agent_id STRING NOT NULL COMMENT '에이전트 ID. 소문자 kebab-case, 64자 이하 (SPEC agent_id)',
-  name STRING NOT NULL COMMENT '표시 이름 (SPEC agent_name)',
-  description STRING NOT NULL COMMENT '한 줄 설명. SPEC.md 본문 1번 섹션의 첫 문장',
-  agent_type STRING NOT NULL COMMENT '에이전트 유형. skill-based-agent | code-based-agent | genie-agent (build_type에서 정해짐)',
-  build_type STRING NOT NULL COMMENT '만드는 방식. skill | code | no-code (SPEC build_type)',
-  serving_type STRING NOT NULL COMMENT '서빙 방식. apps | job | se | genie (SPEC serving_type)',
-  origin STRING NOT NULL COMMENT '출처. 에이전트를 만든 플랫폼이나 조직을 적는다 (SPEC origin). 예: databricks, 사내 개발 플랫폼 이름',
-  owner STRING NOT NULL COMMENT '담당자 이메일 (SPEC owner)',
-  owner_group STRING NOT NULL COMMENT '담당 조직 (SPEC owner_group)',
-  service_criticality STRING NOT NULL COMMENT '서비스 중요도. 상 | 중 | 하 (SPEC service_criticality)',
-  data_sensitivity STRING NOT NULL COMMENT '데이터 민감도. 공개 | 내부 | 대외비 | 개인정보 (SPEC data_sensitivity)',
-  security_level STRING NOT NULL COMMENT '보안 등급. 일반 | 강화 (SPEC security_level)',
-  uc_permissions ARRAY<STRUCT<object: STRING, privilege: STRING>> NOT NULL COMMENT '필요한 UC 권한. object는 세 부분 이름(catalog.schema.object) (SPEC uc_permissions)',
-  success_criteria_json STRING NOT NULL COMMENT '성공 기준 (JSON): correctness_min·relevance_min·safety_min(0~1), latency_p90_seconds(초) (SPEC success_criteria)',
-  flagship_model BOOLEAN NOT NULL COMMENT '대표 모델 사용 선언 (SPEC flagship_model)',
-  model_service STRING NOT NULL COMMENT '기본 Gateway Model Service 이름 (SPEC model_service)',
-  lifecycle STRING NOT NULL COMMENT '생애 상태. active(사용 중) | retired(종료)',
-  current_version STRING COMMENT '가장 최근에 등록한 버전. 운영 버전은 production 테이블에서 본다',
-  spec_uri STRING COMMENT '최근 등록 버전의 소스 스냅샷 경로 (UC Volume)',
+  agent_id STRING NOT NULL COMMENT '에이전트 ID. 소문자·숫자·하이픈 (SPEC agent_id)',
+  name STRING NOT NULL COMMENT '표시 이름',
+  description STRING COMMENT '한 줄 설명',
+  build_type STRING NOT NULL COMMENT '종류. skill | code | no_code',
+  owner STRING NOT NULL COMMENT '담당자. 비어 있으면 처음 등록한 사람',
+  owner_group STRING COMMENT '담당 팀 (계정 그룹)',
+  service_criticality STRING NOT NULL COMMENT '서비스 중요도. low | medium | high',
+  data_sensitivity STRING NOT NULL COMMENT '데이터 민감도. public | internal | confidential | personal',
+  security_level STRING NOT NULL COMMENT '보안 등급. 관리자 정책의 등급 목록 코드 (기본 general | important | secret)',
+  lifecycle STRING NOT NULL COMMENT '수명 단계. registered(등록됨) | production(운영 중) | archived(보관)',
+  spec VARIANT COMMENT '마지막 등록 때의 SPEC.md 항목',
+  created_by STRING NOT NULL COMMENT '처음 등록한 사람',
   created_at TIMESTAMP NOT NULL COMMENT '처음 등록한 시각 (UTC)',
   updated_at TIMESTAMP NOT NULL COMMENT '마지막으로 바뀐 시각 (UTC)',
   CONSTRAINT agents_pk PRIMARY KEY (agent_id)
 )
-COMMENT '조직 레지스트리에 등록된 에이전트와 SPEC 정보. aops register가 처음 등록할 때 만들고 새 버전마다 갱신한다'
+COMMENT '에이전트 마스터. 첫 register(노코드는 첫 배포)가 만들고 deploy가 운영 상태를 바꾼다'
 TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
-CREATE TABLE IF NOT EXISTS __SCHEMA__.validations (
-  validation_id STRING NOT NULL COMMENT '검증 ID. uuid4().hex',
-  agent_id STRING NOT NULL COMMENT '검증한 에이전트 ID',
-  candidate_version STRING NOT NULL COMMENT '후보 버전. major.minor.patch (SPEC agent_version)',
-  artifact_sha256 STRING NOT NULL COMMENT '검사한 후보 소스 묶음(tar.gz)의 sha256',
-  artifact_path STRING NOT NULL COMMENT '검증 대기 위치에 올린 후보 소스 경로 (UC Volume)',
-  policy_version INT NOT NULL COMMENT '검사에 쓴 관리자 정책 버전',
-  job_id BIGINT COMMENT 'validate Lakeflow Job ID',
-  job_run_id BIGINT COMMENT 'validate Job 실행 ID',
-  mlflow_run_id STRING COMMENT '평가 결과를 남긴 MLflow run ID (32자리 16진수)',
-  status STRING NOT NULL COMMENT '검증 상태. running | passed | failed',
-  checks_json STRING COMMENT '단계별 결과 (JSON 배열): format·evaluate·guardrails·compat 단계의 status·detail',
-  correctness DOUBLE COMMENT '평가 정답성 평균 (0~1)',
-  relevance DOUBLE COMMENT '평가 관련성 평균 (0~1)',
-  safety DOUBLE COMMENT '평가 안전성 평균 (0~1)',
-  latency_p90_seconds DOUBLE COMMENT '평가 실행의 응답 지연 p90 (초)',
-  redteam_pass_rate DOUBLE COMMENT '레드팀 시험 통과율 (0~1)',
-  requested_by STRING NOT NULL COMMENT 'aops validate를 실행한 사람 이메일',
-  started_at TIMESTAMP NOT NULL COMMENT 'Job 시작 시각 (UTC)',
-  finished_at TIMESTAMP COMMENT 'Job 종료 시각 (UTC). 실행 중이면 비어 있음',
-  CONSTRAINT validations_pk PRIMARY KEY (validation_id),
-  CONSTRAINT validations_policy_fk FOREIGN KEY (policy_version) REFERENCES __SCHEMA__.policies (policy_version)
+CREATE TABLE IF NOT EXISTS __SCHEMA__.genie_agents (
+  agent_id STRING NOT NULL COMMENT '에이전트 ID',
+  dev_space_id STRING COMMENT '개발용 Genie Agent의 space ID',
+  prod_space_id STRING COMMENT '운영용 Genie Agent의 space ID (첫 배포 때 채운다)',
+  folder_path STRING COMMENT 'aops가 만든 에이전트 폴더 (서비스 주체 권한이 이 폴더에서 상속된다)',
+  consumer_group STRING COMMENT '공개 그룹 (배포 때 CAN RUN을 준다)',
+  warehouse_id STRING COMMENT 'Genie Agent가 쓰는 SQL warehouse',
+  updated_at TIMESTAMP NOT NULL COMMENT '마지막으로 바뀐 시각 (UTC)',
+  CONSTRAINT genie_agents_pk PRIMARY KEY (agent_id)
 )
-COMMENT 'aops validate Job 결과. 같은 소스 해시로 현재 정책에서 통과한 행만 등록·배포의 근거가 된다. 개발 중 기록은 보지 않는다'
+COMMENT '노코드(Genie Agent) 에이전트의 개발용·운영용 스페이스와 공개 그룹'
 TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
 CREATE TABLE IF NOT EXISTS __SCHEMA__.agent_versions (
   agent_id STRING NOT NULL COMMENT '에이전트 ID',
-  version STRING NOT NULL COMMENT '등록 버전. major.minor.patch, SPEC agent_version과 같다',
-  semver_type STRING NOT NULL COMMENT '이전 등록 버전 대비 변경 크기. major | minor | patch',
-  model_service STRING NOT NULL COMMENT '이 버전이 쓰는 Gateway Model Service 이름',
-  artifact_path STRING NOT NULL COMMENT '소스 스냅샷 경로. /Volumes/<catalog>/<schema>/agent_artifacts/agents/<agent_id>/<version>/<sha256>.tar.gz',
-  artifact_sha256 STRING NOT NULL COMMENT '소스 스냅샷(tar.gz)의 sha256',
-  artifact_size BIGINT NOT NULL COMMENT '소스 스냅샷 크기 (바이트)',
-  skill_names ARRAY<STRING> NOT NULL COMMENT '포함된 스킬 이름 목록',
-  harness STRING COMMENT '실행 하네스. codex | claude. 코드 에이전트는 비어 있음',
-  harness_version STRING COMMENT '고정한 하네스 버전 (uv.lock 기준)',
-  sdk_versions MAP<STRING, STRING> COMMENT '고정한 상위 패키지 버전 (uv.lock 기준). 예: {"mlflow": "3.17.2"}',
-  uv_lock_sha256 STRING COMMENT 'uv.lock 파일의 sha256',
-  git_commit STRING COMMENT '등록한 소스의 git 커밋 (40자리)',
-  uc_model_name STRING COMMENT 'UC registered model 이름 (catalog.schema.model)',
-  uc_model_version INT COMMENT 'UC registered model 버전 번호',
-  logged_model_id STRING COMMENT 'MLflow LoggedModel ID (m-로 시작)',
-  validation_id STRING NOT NULL COMMENT '등록 근거가 된 통과 검증 ID',
-  policy_version INT NOT NULL COMMENT '등록할 때 적용된 관리자 정책 버전',
-  spec_json STRING NOT NULL COMMENT '등록 시점의 SPEC.md 15개 필드 전체 (JSON)',
-  registered_by STRING NOT NULL COMMENT 'aops register를 실행한 사람 이메일',
-  registered_at TIMESTAMP NOT NULL COMMENT '등록 시각 (UTC)',
-  CONSTRAINT agent_versions_pk PRIMARY KEY (agent_id, version),
-  CONSTRAINT agent_versions_agent_fk FOREIGN KEY (agent_id) REFERENCES __SCHEMA__.agents (agent_id),
-  CONSTRAINT agent_versions_validation_fk FOREIGN KEY (validation_id) REFERENCES __SCHEMA__.validations (validation_id)
+  version STRING NOT NULL COMMENT '버전 (최초 1.0.0)',
+  status STRING NOT NULL COMMENT '버전 상태. registered | production(지금 운영) | retired(이전 운영)',
+  source_sha256 STRING COMMENT '버전 zip 안 파일 내용의 해시 (고등급은 NULL)',
+  artifact_path STRING COMMENT '에이전트 볼륨의 버전 zip 경로 (/Volumes/.../<agent_id>/<version>.zip)',
+  size_bytes BIGINT COMMENT '버전 zip 크기',
+  skills_sha256 STRING COMMENT '스킬 통합 해시 (별칭:해시 줄을 별칭 순으로)',
+  harness STRING COMMENT '기본 하네스 (claude | codex)',
+  uc_model_version INT COMMENT 'UC registered model 버전 (코드 에이전트)',
+  spec VARIANT COMMENT '이 버전의 SPEC.md 항목',
+  registered_by STRING NOT NULL COMMENT '등록한 사람',
+  registered_at TIMESTAMP NOT NULL COMMENT '등록한 시각 (UTC)',
+  CONSTRAINT agent_versions_pk PRIMARY KEY (agent_id, version)
 )
-COMMENT '등록된 버전과 소스 스냅샷. 바꾸지 않는다. 통과한 검증이 있는 소스만 들어온다'
+COMMENT '저장된 버전. 등록된 버전의 내용은 바꾸지 않는다 (zip은 한 번만 쓴다)'
 TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
-CREATE TABLE IF NOT EXISTS __SCHEMA__.deploy_requests (
-  request_id STRING NOT NULL COMMENT '배포 요청 ID. uuid4().hex',
-  agent_id STRING NOT NULL COMMENT '배포할 에이전트 ID',
-  version STRING NOT NULL COMMENT '배포할 등록 버전',
-  target_workspace STRING NOT NULL COMMENT '배포할 워크스페이스 주소',
-  app_name STRING NOT NULL COMMENT '배포할 Databricks App 이름. agent-bricks-<이름>',
-  validation_id STRING NOT NULL COMMENT '요청 근거가 된 통과 검증 ID',
-  policy_version INT NOT NULL COMMENT '요청할 때 적용된 관리자 정책 버전',
-  requested_by STRING NOT NULL COMMENT 'aops deploy를 실행한 사람 이메일',
-  requested_at TIMESTAMP NOT NULL COMMENT '요청 시각 (UTC)',
-  state STRING NOT NULL COMMENT '요청 상태. pending(승인 대기) | approved | rejected | deployed | failed',
-  updated_at TIMESTAMP NOT NULL COMMENT '상태가 마지막으로 바뀐 시각 (UTC)',
-  CONSTRAINT deploy_requests_pk PRIMARY KEY (request_id),
-  CONSTRAINT deploy_requests_version_fk FOREIGN KEY (agent_id, version) REFERENCES __SCHEMA__.agent_versions (agent_id, version)
+CREATE TABLE IF NOT EXISTS __SCHEMA__.agent_version_skills (
+  agent_id STRING NOT NULL COMMENT '에이전트 ID',
+  version STRING NOT NULL COMMENT '버전',
+  skill_alias STRING NOT NULL COMMENT '에이전트 안의 스킬 이름 (폴더 이름)',
+  uc_name STRING COMMENT 'Unity Gateway Skills 이름 (<catalog>.<schema>.<agent_id>__<별칭>). 게시를 건너뛰면 NULL',
+  skill_sha256 STRING NOT NULL COMMENT '스킬 폴더 해시',
+  source STRING NOT NULL COMMENT '원천 (에이전트 안 경로 또는 공용 스킬 UC 이름)',
+  publication_mode STRING NOT NULL COMMENT 'agent(에이전트 전용) | shared_reference(공용 스킬 참조)',
+  CONSTRAINT agent_version_skills_pk PRIMARY KEY (agent_id, version, skill_alias)
 )
-COMMENT '배포 요청. aops deploy가 만들고, console App 승인과 배포 Job이 상태를 바꾼다'
+COMMENT '버전별 스킬과 UC Skill 이름·해시'
+TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
+
+CREATE TABLE IF NOT EXISTS __SCHEMA__.validation_runs (
+  validation_run_id STRING NOT NULL COMMENT '검사 실행 ID',
+  agent_id STRING NOT NULL COMMENT '에이전트 ID',
+  version STRING COMMENT '검사한 버전 (노코드는 배포 때 정해져 NULL일 수 있다)',
+  source_sha256 STRING COMMENT '검사한 내용의 해시',
+  policy_version INT NOT NULL COMMENT '검사에 쓴 정책 버전',
+  mode STRING NOT NULL COMMENT 'job(조직 검사, 배포 근거) | local(참고용)',
+  status STRING NOT NULL COMMENT 'queued | running | passed | failed | stale(점검 중 정의가 바뀜) | error',
+  steps VARIANT COMMENT '단계별 결과 [{name, status, detail}]',
+  checks VARIANT COMMENT '판정 근거 (규칙별 결과, 점수 등)',
+  failure_reason STRING COMMENT '실패·오류 사유',
+  job_run_id BIGINT COMMENT 'validate Job 실행 ID',
+  started_by STRING NOT NULL COMMENT '검사를 요청한 사람',
+  started_at TIMESTAMP NOT NULL COMMENT '시작 시각 (UTC)',
+  ended_at TIMESTAMP COMMENT '끝난 시각 (UTC)',
+  CONSTRAINT validation_runs_pk PRIMARY KEY (validation_run_id)
+)
+COMMENT 'validate Job의 검사 실행 (Gate Self Check). 배포 요청이 같은 버전·정책의 passed 행을 요구한다'
+TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
+
+CREATE TABLE IF NOT EXISTS __SCHEMA__.eval_results (
+  validation_run_id STRING NOT NULL COMMENT '검사 실행 ID',
+  agent_id STRING NOT NULL COMMENT '에이전트 ID',
+  question_id STRING NOT NULL COMMENT '문항 ID (노코드는 벤치마크 문항 ID)',
+  question STRING COMMENT '질문',
+  assessment STRING COMMENT '판정 (GOOD | BAD | NEEDS_REVIEW 등)',
+  reasons VARIANT COMMENT '판정 이유',
+  expected STRING COMMENT '정답 (노코드는 정답 SQL)',
+  generated STRING COMMENT '생성 결과 (노코드는 생성 SQL)',
+  created_at TIMESTAMP NOT NULL COMMENT '기록 시각 (UTC)',
+  CONSTRAINT eval_results_pk PRIMARY KEY (validation_run_id, question_id)
+)
+COMMENT '문항별 평가 결과. 운영 버전의 결과가 다음 검사의 회귀 비교 기준이 된다'
+TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
+
+CREATE TABLE IF NOT EXISTS __SCHEMA__.release_gates (
+  gate_id STRING NOT NULL COMMENT '배포 심사 요청 ID',
+  agent_id STRING NOT NULL COMMENT '에이전트 ID',
+  version STRING COMMENT '배포할 버전 (노코드는 배포 성공 때 정해진다)',
+  requester STRING NOT NULL COMMENT '요청한 사람',
+  reason STRING COMMENT '요청 사유',
+  requested_at TIMESTAMP NOT NULL COMMENT '요청 시각 (UTC)',
+  upgrade_type STRING COMMENT '운영 버전 대비 변경 폭. initial | major | minor | patch | rollback',
+  policy_version INT NOT NULL COMMENT '심사에 쓴 정책 버전',
+  validation_policy_mode STRING NOT NULL COMMENT '정책의 검증 방식. mandatory | optional | exempt',
+  validation_run_id STRING COMMENT '근거 검사 실행',
+  approval_mode STRING NOT NULL COMMENT '정책의 승인 방식. required | optional | auto',
+  approval_channel STRING NOT NULL COMMENT '결재 채널. console | external',
+  required_approvals INT NOT NULL COMMENT '필요한 승인 수',
+  itsm_ticket_id STRING COMMENT '외부 결재 티켓 번호 (외부 결재 확장)',
+  itsm_ticket_url STRING COMMENT '외부 결재 티켓 주소',
+  decision STRING NOT NULL COMMENT '심사 상태. validating | pending_approval | approved | rejected | canceled',
+  decision_reason STRING COMMENT '반려 사유 등',
+  deployment_id STRING COMMENT '승인 뒤 배포 Job이 만든 배포',
+  updated_at TIMESTAMP NOT NULL COMMENT '마지막으로 바뀐 시각 (UTC)',
+  CONSTRAINT release_gates_pk PRIMARY KEY (gate_id)
+)
+COMMENT '배포 심사 요청 (aops deploy). Gate(검사)와 승인을 거쳐 배포 Job으로 이어진다'
 TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
 CREATE TABLE IF NOT EXISTS __SCHEMA__.approvals (
-  approval_id STRING NOT NULL COMMENT '승인 기록 ID. uuid4().hex',
-  request_id STRING NOT NULL COMMENT '대상 배포 요청 ID',
-  approver STRING NOT NULL COMMENT '결정한 사람 이메일. 요청자·담당자와 달라야 한다',
-  decision STRING NOT NULL COMMENT '결정. approved | rejected',
-  reason STRING COMMENT '결정 사유. 반려할 때는 필수',
-  decided_at TIMESTAMP NOT NULL COMMENT '결정 시각 (UTC)',
-  CONSTRAINT approvals_pk PRIMARY KEY (approval_id),
-  CONSTRAINT approvals_request_fk FOREIGN KEY (request_id) REFERENCES __SCHEMA__.deploy_requests (request_id)
+  approval_id STRING NOT NULL COMMENT '결재 ID',
+  gate_id STRING NOT NULL COMMENT '배포 심사 요청 ID',
+  approver STRING NOT NULL COMMENT '결재한 사람. 정책의 자동 승인은 policy:auto',
+  decision STRING NOT NULL COMMENT 'approve | reject',
+  comment STRING COMMENT '의견',
+  channel STRING NOT NULL COMMENT 'console | external | policy',
+  decided_at TIMESTAMP NOT NULL COMMENT '결재 시각 (UTC)',
+  CONSTRAINT approvals_pk PRIMARY KEY (approval_id)
 )
-COMMENT '배포 승인·반려 이력. 추가만 하고 고치지 않는다. console App만 쓴다'
+COMMENT '결재 이력. 추가만 하고 고치지 않는다'
 TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
 CREATE TABLE IF NOT EXISTS __SCHEMA__.deployments (
-  deployment_id STRING NOT NULL COMMENT '배포 기록 ID. uuid4().hex',
-  request_id STRING NOT NULL COMMENT '승인된 배포 요청 ID',
-  agent_id STRING NOT NULL COMMENT '배포한 에이전트 ID',
-  version STRING NOT NULL COMMENT '배포한 등록 버전',
-  app_name STRING NOT NULL COMMENT 'Databricks App 이름',
-  app_url STRING COMMENT 'Databricks App 주소',
-  apps_deployment_id STRING COMMENT 'Databricks Apps 배포 ID (32자리 16진수)',
-  server STRING NOT NULL COMMENT '에이전트 서버 종류. agentbricks(DurableAgentServer)만 허용',
-  guardrail_check_json STRING COMMENT '배포 시 가드레일 점검 결과 (JSON): 상태, 확인한 Gateway 정책, 레드팀 통과율',
-  telemetry_enabled BOOLEAN NOT NULL COMMENT 'Apps telemetry(otel_* 테이블)를 켰는지',
-  status STRING NOT NULL COMMENT '배포 상태. running | succeeded | failed',
-  deploy_job_run_id BIGINT COMMENT '배포 Job 실행 ID',
-  deployed_by STRING NOT NULL COMMENT '배포 Job을 실행한 주체 (서비스 주체 application ID 또는 이메일)',
-  started_at TIMESTAMP NOT NULL COMMENT '배포 시작 시각 (UTC)',
-  finished_at TIMESTAMP COMMENT '배포 종료 시각 (UTC)',
-  CONSTRAINT deployments_pk PRIMARY KEY (deployment_id),
-  CONSTRAINT deployments_request_fk FOREIGN KEY (request_id) REFERENCES __SCHEMA__.deploy_requests (request_id)
-)
-COMMENT '배포 Job 결과. 승인된 요청마다 한 번 이상 생긴다'
-TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
-
-CREATE TABLE IF NOT EXISTS __SCHEMA__.production (
-  transition_id STRING NOT NULL COMMENT '운영 지정 기록 ID. uuid4().hex',
+  deployment_id STRING NOT NULL COMMENT '배포 ID',
+  gate_id STRING COMMENT '배포 심사 요청 ID (개인 시험 배포는 NULL)',
   agent_id STRING NOT NULL COMMENT '에이전트 ID',
-  version STRING NOT NULL COMMENT '운영으로 지정한 버전',
-  previous_version STRING COMMENT '바로 전 운영 버전. 첫 지정이면 비어 있음',
-  deployment_id STRING NOT NULL COMMENT '이 버전이 실제로 배포된 배포 기록 ID',
-  action STRING NOT NULL COMMENT 'promote(새 버전 지정) | rollback(과거 운영 버전을 다시 지정)',
-  is_current BOOLEAN NOT NULL COMMENT '현재 운영 버전인지. 에이전트마다 하나만 true',
-  reason STRING COMMENT '지정·되돌림 사유',
-  updated_by STRING NOT NULL COMMENT 'aops promote를 실행한 사람 이메일',
-  updated_at TIMESTAMP NOT NULL COMMENT '지정 시각 (UTC)',
-  CONSTRAINT production_pk PRIMARY KEY (transition_id),
-  CONSTRAINT production_deployment_fk FOREIGN KEY (deployment_id) REFERENCES __SCHEMA__.deployments (deployment_id)
+  version STRING NOT NULL COMMENT '배포한 버전',
+  environment STRING NOT NULL COMMENT 'dev(개인 시험 배포) | production(운영 반영)',
+  target STRING COMMENT '반영한 대상 (앱 이름, 운영용 Genie space ID, UC Skill 이름 목록)',
+  app_url STRING COMMENT '앱 주소 (코드 에이전트)',
+  status STRING NOT NULL COMMENT 'running | succeeded | failed',
+  job_run_id BIGINT COMMENT '배포 Job 실행 ID',
+  detail VARIANT COMMENT '배포 결과 세부 (바뀐 파일, 의존 대조, 확인 결과)',
+  started_at TIMESTAMP NOT NULL COMMENT '시작 시각 (UTC)',
+  ended_at TIMESTAMP COMMENT '끝난 시각 (UTC)',
+  CONSTRAINT deployments_pk PRIMARY KEY (deployment_id)
 )
-COMMENT '운영 버전 지정 이력. aops promote가 한 트랜잭션에서 새 행을 넣고 이전 행의 is_current를 끈다'
+COMMENT '배포 결과. 배포 Job이 쓴다'
 TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
--- 허용 값 (CHECK)
-ALTER TABLE __SCHEMA__.policies DROP CONSTRAINT IF EXISTS policies_status_ck;
-ALTER TABLE __SCHEMA__.policies ADD CONSTRAINT policies_status_ck CHECK (status IN ('active', 'retired'));
-ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_id_ck;
-ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_id_ck CHECK (agent_id RLIKE '^[a-z0-9]+(-[a-z0-9]+)*$' AND length(agent_id) <= 64);
-ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_type_ck;
-ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_type_ck CHECK (agent_type IN ('skill-based-agent', 'code-based-agent', 'genie-agent'));
-ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_build_type_ck;
-ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_build_type_ck CHECK (build_type IN ('skill', 'code', 'no-code'));
-ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_origin_ck;
-ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_origin_ck CHECK (length(trim(origin)) > 0);
-ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_criticality_ck;
-ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_criticality_ck CHECK (service_criticality IN ('상', '중', '하'));
-ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_sensitivity_ck;
-ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_sensitivity_ck CHECK (data_sensitivity IN ('공개', '내부', '대외비', '개인정보'));
-ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_security_ck;
-ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_security_ck CHECK (security_level IN ('일반', '강화'));
-ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_lifecycle_ck;
-ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_lifecycle_ck CHECK (lifecycle IN ('active', 'retired'));
-ALTER TABLE __SCHEMA__.validations DROP CONSTRAINT IF EXISTS validations_status_ck;
-ALTER TABLE __SCHEMA__.validations ADD CONSTRAINT validations_status_ck CHECK (status IN ('running', 'passed', 'failed'));
-ALTER TABLE __SCHEMA__.agent_versions DROP CONSTRAINT IF EXISTS agent_versions_semver_ck;
-ALTER TABLE __SCHEMA__.agent_versions ADD CONSTRAINT agent_versions_semver_ck CHECK (semver_type IN ('major', 'minor', 'patch') AND version RLIKE '^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$');
-ALTER TABLE __SCHEMA__.agent_versions DROP CONSTRAINT IF EXISTS agent_versions_sha_ck;
-ALTER TABLE __SCHEMA__.agent_versions ADD CONSTRAINT agent_versions_sha_ck CHECK (artifact_sha256 RLIKE '^[0-9a-f]{64}$');
-ALTER TABLE __SCHEMA__.deploy_requests DROP CONSTRAINT IF EXISTS deploy_requests_state_ck;
-ALTER TABLE __SCHEMA__.deploy_requests ADD CONSTRAINT deploy_requests_state_ck CHECK (state IN ('pending', 'approved', 'rejected', 'deployed', 'failed'));
-ALTER TABLE __SCHEMA__.approvals DROP CONSTRAINT IF EXISTS approvals_decision_ck;
-ALTER TABLE __SCHEMA__.approvals ADD CONSTRAINT approvals_decision_ck CHECK (decision IN ('approved', 'rejected') AND (decision = 'approved' OR reason IS NOT NULL));
-ALTER TABLE __SCHEMA__.deployments DROP CONSTRAINT IF EXISTS deployments_server_ck;
-ALTER TABLE __SCHEMA__.deployments ADD CONSTRAINT deployments_server_ck CHECK (server = 'agentbricks');
-ALTER TABLE __SCHEMA__.deployments DROP CONSTRAINT IF EXISTS deployments_status_ck;
-ALTER TABLE __SCHEMA__.deployments ADD CONSTRAINT deployments_status_ck CHECK (status IN ('running', 'succeeded', 'failed'));
-ALTER TABLE __SCHEMA__.production DROP CONSTRAINT IF EXISTS production_action_ck;
-ALTER TABLE __SCHEMA__.production ADD CONSTRAINT production_action_ck CHECK (action IN ('promote', 'rollback'));
+CREATE TABLE IF NOT EXISTS __SCHEMA__.agent_production (
+  agent_id STRING NOT NULL COMMENT '에이전트 ID',
+  current_version STRING NOT NULL COMMENT '지금 운영 버전',
+  previous_version STRING COMMENT '직전 운영 버전 (되돌리기 기준)',
+  target STRING COMMENT '운영 대상 (앱 이름, 운영용 Genie space ID, UC Skill 이름 목록)',
+  updated_by STRING NOT NULL COMMENT '배포를 요청한 사람',
+  updated_at TIMESTAMP NOT NULL COMMENT '바뀐 시각 (UTC)',
+  CONSTRAINT agent_production_pk PRIMARY KEY (agent_id)
+)
+COMMENT '운영 포인터. 에이전트당 1행. 배포 Job이 바꾼다'
+TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
-CREATE OR REPLACE VIEW __SCHEMA__.agent_status (
-  agent_id COMMENT '에이전트 ID',
-  name COMMENT '표시 이름',
-  agent_type COMMENT '에이전트 유형',
-  owner COMMENT '담당자 이메일',
-  owner_group COMMENT '담당 조직',
-  data_sensitivity COMMENT '데이터 민감도',
-  latest_version COMMENT '가장 최근 등록 버전',
-  production_version COMMENT '현재 운영 버전',
-  production_since COMMENT '현재 운영 버전으로 지정된 시각',
-  last_validated_version COMMENT '가장 최근 검증한 후보 버전',
-  last_validation_status COMMENT '가장 최근 검증 상태',
-  pending_requests COMMENT '승인 대기 중인 배포 요청 수'
+CREATE TABLE IF NOT EXISTS __SCHEMA__.agent_events (
+  event_id STRING NOT NULL COMMENT '이벤트 ID',
+  agent_id STRING NOT NULL COMMENT '에이전트 ID',
+  version STRING COMMENT '관련 버전',
+  event_type STRING NOT NULL COMMENT 'register | validate | gate_requested | gate_approved | gate_rejected | deploy | rollback | promote | load',
+  actor STRING NOT NULL COMMENT '한 사람 (정책 자동 승인은 policy:auto)',
+  at TIMESTAMP NOT NULL COMMENT '시각 (UTC)',
+  detail VARIANT COMMENT '세부 (권한 대상, 배포 대상 등)',
+  CONSTRAINT agent_events_pk PRIMARY KEY (event_id)
 )
-COMMENT 'console App 레지스트리 화면용 요약: 에이전트별 최신 등록 버전, 운영 버전, 최근 검증, 승인 대기 요청'
+COMMENT '수명주기 감사 로그. 단계마다 한 행을 남긴다'
+TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
+
+CREATE TABLE IF NOT EXISTS __SCHEMA__.rate_cards (
+  model STRING NOT NULL COMMENT '모델 또는 Model Service 이름',
+  input_per_mtok DOUBLE NOT NULL COMMENT '입력 100만 토큰당 단가',
+  output_per_mtok DOUBLE NOT NULL COMMENT '출력 100만 토큰당 단가',
+  currency STRING NOT NULL COMMENT '통화 (예: USD)',
+  valid_from DATE NOT NULL COMMENT '적용 시작일',
+  valid_to DATE COMMENT '적용 종료일 (NULL이면 지금도 적용)',
+  CONSTRAINT rate_cards_pk PRIMARY KEY (model, valid_from)
+)
+COMMENT '모델별 단가 이력. 추정 비용(trace 토큰 × 단가)에 쓴다'
+TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
+
+-- 허용 값 (CHECK). 테이블을 만든 뒤 붙인다 (CREATE TABLE 안에는 쓸 수 없다)
+ALTER TABLE __SCHEMA__.policies DROP CONSTRAINT IF EXISTS policies_status;
+ALTER TABLE __SCHEMA__.policies ADD CONSTRAINT policies_status CHECK (status IN ('active', 'retired'));
+ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_build_type;
+ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_build_type CHECK (build_type IN ('skill', 'code', 'no_code'));
+ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_criticality;
+ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_criticality CHECK (service_criticality IN ('low', 'medium', 'high'));
+ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_sensitivity;
+ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_sensitivity CHECK (data_sensitivity IN ('public', 'internal', 'confidential', 'personal'));
+ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_lifecycle;
+ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_lifecycle CHECK (lifecycle IN ('registered', 'production', 'archived'));
+ALTER TABLE __SCHEMA__.agent_versions DROP CONSTRAINT IF EXISTS agent_versions_status;
+ALTER TABLE __SCHEMA__.agent_versions ADD CONSTRAINT agent_versions_status CHECK (status IN ('registered', 'production', 'retired'));
+ALTER TABLE __SCHEMA__.agent_version_skills DROP CONSTRAINT IF EXISTS agent_version_skills_mode;
+ALTER TABLE __SCHEMA__.agent_version_skills ADD CONSTRAINT agent_version_skills_mode CHECK (publication_mode IN ('agent', 'shared_reference'));
+ALTER TABLE __SCHEMA__.validation_runs DROP CONSTRAINT IF EXISTS validation_runs_mode;
+ALTER TABLE __SCHEMA__.validation_runs ADD CONSTRAINT validation_runs_mode CHECK (mode IN ('job', 'local'));
+ALTER TABLE __SCHEMA__.validation_runs DROP CONSTRAINT IF EXISTS validation_runs_status;
+ALTER TABLE __SCHEMA__.validation_runs ADD CONSTRAINT validation_runs_status CHECK (status IN ('queued', 'running', 'passed', 'failed', 'stale', 'error'));
+ALTER TABLE __SCHEMA__.release_gates DROP CONSTRAINT IF EXISTS release_gates_validation;
+ALTER TABLE __SCHEMA__.release_gates ADD CONSTRAINT release_gates_validation CHECK (validation_policy_mode IN ('mandatory', 'optional', 'exempt'));
+ALTER TABLE __SCHEMA__.release_gates DROP CONSTRAINT IF EXISTS release_gates_approval;
+ALTER TABLE __SCHEMA__.release_gates ADD CONSTRAINT release_gates_approval CHECK (approval_mode IN ('required', 'optional', 'auto'));
+ALTER TABLE __SCHEMA__.release_gates DROP CONSTRAINT IF EXISTS release_gates_channel;
+ALTER TABLE __SCHEMA__.release_gates ADD CONSTRAINT release_gates_channel CHECK (approval_channel IN ('console', 'external'));
+ALTER TABLE __SCHEMA__.release_gates DROP CONSTRAINT IF EXISTS release_gates_decision;
+ALTER TABLE __SCHEMA__.release_gates ADD CONSTRAINT release_gates_decision CHECK (decision IN ('validating', 'pending_approval', 'approved', 'rejected', 'canceled'));
+ALTER TABLE __SCHEMA__.approvals DROP CONSTRAINT IF EXISTS approvals_decision;
+ALTER TABLE __SCHEMA__.approvals ADD CONSTRAINT approvals_decision CHECK (decision IN ('approve', 'reject'));
+ALTER TABLE __SCHEMA__.approvals DROP CONSTRAINT IF EXISTS approvals_channel;
+ALTER TABLE __SCHEMA__.approvals ADD CONSTRAINT approvals_channel CHECK (channel IN ('console', 'external', 'policy'));
+ALTER TABLE __SCHEMA__.deployments DROP CONSTRAINT IF EXISTS deployments_environment;
+ALTER TABLE __SCHEMA__.deployments ADD CONSTRAINT deployments_environment CHECK (environment IN ('dev', 'production'));
+ALTER TABLE __SCHEMA__.deployments DROP CONSTRAINT IF EXISTS deployments_status;
+ALTER TABLE __SCHEMA__.deployments ADD CONSTRAINT deployments_status CHECK (status IN ('running', 'succeeded', 'failed'));
+ALTER TABLE __SCHEMA__.agent_events DROP CONSTRAINT IF EXISTS agent_events_type;
+ALTER TABLE __SCHEMA__.agent_events ADD CONSTRAINT agent_events_type CHECK (event_type IN ('register', 'validate', 'gate_requested', 'gate_approved', 'gate_rejected', 'deploy', 'rollback', 'promote', 'load'));
+
+CREATE OR REPLACE VIEW __SCHEMA__.agent_status
+COMMENT 'console 레지스트리 화면과 aops list가 쓰는 에이전트별 현황'
 AS
-WITH latest_validation AS (
-  SELECT agent_id,
-         max_by(candidate_version, started_at) AS last_validated_version,
-         max_by(status, started_at) AS last_validation_status
-  FROM __SCHEMA__.validations GROUP BY agent_id
-),
-pending AS (
-  SELECT agent_id, count(*) AS pending_requests
-  FROM __SCHEMA__.deploy_requests WHERE state = 'pending' GROUP BY agent_id
-)
-SELECT a.agent_id, a.name, a.agent_type, a.owner, a.owner_group, a.data_sensitivity,
-       a.current_version,
-       p.version,
-       p.updated_at,
-       v.last_validated_version, v.last_validation_status,
-       coalesce(q.pending_requests, 0)
+SELECT
+  a.agent_id, a.name, a.description, a.build_type, a.owner, a.owner_group,
+  a.service_criticality, a.data_sensitivity, a.security_level, a.lifecycle,
+  (SELECT max_by(v.version, v.registered_at) FROM __SCHEMA__.agent_versions v WHERE v.agent_id = a.agent_id) AS latest_version,
+  p.current_version AS production_version,
+  (SELECT max_by(r.status, r.started_at) FROM __SCHEMA__.validation_runs r WHERE r.agent_id = a.agent_id) AS last_validation,
+  (SELECT count(*) FROM __SCHEMA__.release_gates g WHERE g.agent_id = a.agent_id AND g.decision IN ('validating', 'pending_approval')) AS pending_gates,
+  a.updated_at
 FROM __SCHEMA__.agents a
-LEFT JOIN __SCHEMA__.production p ON p.agent_id = a.agent_id AND p.is_current
-LEFT JOIN latest_validation v ON v.agent_id = a.agent_id
-LEFT JOIN pending q ON q.agent_id = a.agent_id;
+LEFT JOIN __SCHEMA__.agent_production p ON p.agent_id = a.agent_id;

@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import __version__, harness, init
+from . import __version__, admin, harness, init, lifecycle
 from .project import Project
 from .runner import run_turn
 from .store import Store
@@ -123,6 +123,11 @@ def parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1", help="기본 127.0.0.1 (이 PC에서만)")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--cors-origin", action="append", help="브라우저에서 직접 부를 화면 주소 (여러 번 가능)")
+
+    for name, handler in lifecycle.add_commands(sub).items():
+        COMMANDS[name] = lambda args, handler=handler: lifecycle.run(handler, args)
+    admin.add_command(sub)
+    COMMANDS["admin"] = admin.cmd_admin
     return root
 
 

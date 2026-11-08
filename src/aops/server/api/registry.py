@@ -8,10 +8,11 @@ codes stored in Delta; screens translate them to Korean labels.
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from ..common import DBX, Link, Page, command, todo
+from ..dbx import caller_of, service_for
 
 router = APIRouter(tags=["레지스트리"])
 
@@ -77,7 +78,7 @@ class AgentVersionDetail(AgentVersion):
 
 
 class ValidationStep(BaseModel):
-    name: Literal["format", "evaluate", "guardrails", "compat", "record"]
+    name: str = Field(examples=["format", "skills", "secrets", "evaluate", "guardrails", "compat", "record"])
     status: Literal["pending", "running", "passed", "failed", "skipped"]
     detail: str | None = Field(None, examples=["correctness 0.86 ≥ 0.80"])
     metrics: dict[str, float] = Field(default_factory=dict)
@@ -140,10 +141,14 @@ class AgentEvent(BaseModel):
     **command("aops list", DBX, screen="console 레지스트리", note="권한이 없는 에이전트도 목록에는 보인다. 가져오기(load)만 막는다."),
 )
 def list_agents(
-    build_type: BuildType | None = None, lifecycle: Lifecycle | None = None, owner: str | None = None,
+    request: Request, build_type: BuildType | None = None, lifecycle: Lifecycle | None = None, owner: str | None = None,
     q: str | None = None, cursor: str | None = None, limit: int = Query(50, le=200),
 ) -> Page[AgentStatus]:
-    raise todo("aops list")
+    svc = service_for("aops list")
+    caller_of(request, svc)
+    rows = [r for r in svc.list_agents(build_type) if (not lifecycle or r["lifecycle"] == lifecycle) and (not owner or r["owner"] == owner)
+            and (not q or q.lower() in (r["agent_id"] + " " + (r.get("name") or "")).lower())]
+    return Page(items=[AgentStatus(**{**r, "pending_gates": int(r.get("pending_gates") or 0)}) for r in rows[:limit]])
 
 
 class LoadArchive(BaseModel):
@@ -175,8 +180,9 @@ class LoadRequest(BaseModel):
         "통과하면 버전 zip 경로와 해시를 주고 agent_events에 load를 남긴다. CLI는 해시를 확인하고 풀어 하네스 설정을 만든 뒤 세션을 연다."
     )),
 )
-def load(agent_id: str, body: LoadRequest) -> LoadInfo:
-    raise todo("aops load")
+def load(agent_id: str, body: LoadRequest, request: Request) -> LoadInfo:
+    svc = service_for("aops load")
+    return LoadInfo(**svc.load(caller_of(request, svc), agent_id, body.version))
 
 
 _ARCHIVE = command("aops load", DBX, note="`load`와 같은 판정을 거친다. 서버(서비스 주체)가 에이전트 볼륨의 `<version>.zip`을 읽어 내준다. 대상자에게는 볼륨 권한을 주지 않는다.")
@@ -184,8 +190,10 @@ _ARCHIVE["responses"] = {200: {"content": {"application/zip": {}}, "description"
 
 
 @router.get("/agents/{agent_id}/versions/{version}/archive", summary="버전 zip 받기", response_class=Response, **_ARCHIVE)
-def get_archive(agent_id: str, version: str) -> Response:
-    raise todo("aops load")
+def get_archive(agent_id: str, version: str, request: Request) -> Response:
+    svc = service_for("aops load")
+    data = svc.archive(caller_of(request, svc), agent_id, version)
+    return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{agent_id}-{version}.zip"'})
 
 
 @router.get("/agents/{agent_id}", summary="에이전트 보기", **command(None, DBX, screen="console 레지스트리"))
@@ -224,5 +232,7 @@ def get_production(agent_id: str) -> AgentProduction:
 
 
 @router.get("/agents/{agent_id}/events", summary="수명주기 이력 (감사 로그)", **command(None, DBX, screen="console 운영 지정 이력"))
-def list_events(agent_id: str, cursor: str | None = None) -> Page[AgentEvent]:
-    raise todo(None)
+def list_events(agent_id: str, request: Request, cursor: str | None = None) -> Page[AgentEvent]:
+    svc = service_for(None)
+    caller_of(request, svc)
+    return Page(items=[AgentEvent(**r) for r in svc.events(agent_id)])
