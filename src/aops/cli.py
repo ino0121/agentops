@@ -6,10 +6,27 @@ import argparse
 import json
 from collections.abc import Callable
 
-from . import __version__, harness
+import sys
+from pathlib import Path
+
+from . import __version__, harness, init
 from .project import Project
 from .runner import run_turn
 from .store import Store
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    if args.type != "skill":
+        where = "Genie Code의 aops 스킬" if args.type == "code" else "aops 서버가 만든 에이전트 폴더의 Genie 화면"
+        print(f"aops: {args.type} 에이전트는 워크스페이스에서 만듭니다 ({where}). 내 PC에서는 skill만 만듭니다.", file=sys.stderr)
+        return 2
+    harness.get(args.harness)  # fail early on an unknown harness
+    project = init.create(Path.cwd(), args.name, harness=args.harness, edition=args.edition)
+    print(f"created {project.root}")
+    for folder in project.skill_folders():
+        print(f"  skill {folder.name}")
+    print(f"next: cd {args.name} && aops run \"공급가액 12,000원의 부가세와 합계는?\"")
+    return 0
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -58,13 +75,19 @@ def _short(text: str, size: int = 90) -> str:
     return text if len(text) <= size else text[: size - 1] + "…"
 
 
-COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {"run": cmd_run, "session": cmd_session}
+COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {"init": cmd_init, "run": cmd_run, "session": cmd_session}
 
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="aops", description="AI 에이전트 라이프사이클 관리")
     root.add_argument("--version", action="version", version=f"aops {__version__}")
     sub = root.add_subparsers(dest="command")
+
+    init_ = sub.add_parser("init", help="새 에이전트 폴더 만들기 (스킬 기반 템플릿)")
+    init_.add_argument("name")
+    init_.add_argument("--type", choices=["skill", "code", "no-code"], default="skill")
+    init_.add_argument("--harness", default="claude", help="기본 하네스 (claude, codex)")
+    init_.add_argument("--edition", choices=["local", "dbx", "omni", "custom"], default="local")
 
     run = sub.add_parser("run", help="질문 하나를 현재 세션에서 실행")
     run.add_argument("prompt")
@@ -88,4 +111,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         parser().print_help()
         return 0
-    return COMMANDS[args.command](args)
+    try:
+        return COMMANDS[args.command](args)
+    except ValueError as error:  # bad input the user can fix (unknown harness, bad name, ...)
+        print(f"aops: {error}", file=sys.stderr)
+        return 2

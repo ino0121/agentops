@@ -35,7 +35,8 @@ class ClaudeHarness:
     async def _run(self, prompt: str, cwd: Path, resume: str | None) -> Turn:
         from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, ToolUseBlock, query
 
-        options = ClaudeAgentOptions(cwd=str(cwd), resume=resume, model=self.model, cli_path=self.cli_path)
+        options = ClaudeAgentOptions(cwd=str(cwd), resume=resume, model=self.model, cli_path=self.cli_path,
+                                     skills=project_skills(cwd) or None)
         turn, texts = Turn(text="", native_session=resume), []
         async for message in query(prompt=prompt, options=options):
             turn.events.append({"type": type(message).__name__, **_plain(message)})
@@ -51,6 +52,12 @@ class ClaudeHarness:
                 turn.text = message.result or ""
         turn.text = turn.text or "\n".join(texts)
         return turn
+
+
+def project_skills(cwd: Path) -> list[str]:
+    """Skills aops placed for Claude; the SDK lets the Skill tool use exactly these."""
+    folder = cwd / ".claude" / "skills"
+    return sorted(p.name for p in folder.iterdir() if (p / "SKILL.md").is_file()) if folder.is_dir() else []
 
 
 def tool_name(name: str, tool_input: dict[str, Any] | None) -> str:

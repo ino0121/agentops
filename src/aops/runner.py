@@ -8,18 +8,21 @@ from typing import Any
 from . import handoff, harness
 from .project import Project
 from .store import Store, now
+from .sync import sync
 
 
 def run_turn(project: Project, prompt: str, *, harness_name: str | None = None, store: Store | None = None,
              get_harness: Callable[..., harness.Harness] = harness.get) -> dict[str, Any]:
     store = store or Store(project)
-    session = store.current_session() or store.create_session(harness_name or project.harness)
-    name = harness_name or session["harness"]
-    if name != session["harness"]:
-        store.set_harness(session["id"], name)
-
+    current = store.current_session()
+    name = harness_name or (current["harness"] if current else project.harness)
+    # Resolve the harness before touching the session, so an unknown name changes nothing.
     adapter = get_harness(name, model=project.model)
     version = adapter.version()
+    session = current or store.create_session(name)
+    if name != session["harness"]:
+        store.set_harness(session["id"], name)
+    sync(project)  # harness settings follow aops.toml before every turn
 
     segment = store.last_segment(session["id"])
     unseen: list[dict[str, Any]] = []

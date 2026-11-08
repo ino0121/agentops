@@ -107,3 +107,18 @@ def test_failed_switch_turn_keeps_the_handoff_for_the_retry(tmp_path):
     assert retry["handoff_turns"] == 1
     assert "remember the word apple" in FakeHarness.calls[-1]["prompt"]
     assert [s["harness"] for s in store.segments(retry["session"])] == ["claude", "codex"]
+
+
+def test_unknown_harness_changes_nothing(tmp_path):
+    project, store = setup(tmp_path)
+    run_turn(project, "one", store=store, get_harness=fake())
+
+    def strict(name, **_):
+        if name not in ("claude", "codex"):
+            raise ValueError(f"unknown harness '{name}'")
+        return FakeHarness(name)
+
+    import pytest
+    with pytest.raises(ValueError):
+        run_turn(project, "two", harness_name="nope", store=store, get_harness=strict)
+    assert store.current_session()["harness"] == "claude"
