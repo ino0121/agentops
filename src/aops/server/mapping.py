@@ -37,6 +37,8 @@ COMMANDS: list[Command] = [
     Command("개발", "aops memory forget"),
     Command("개발", "aops add"),
     Command("개발", "aops remove"),
+    Command("찾기·가져오기", "aops list"),
+    Command("찾기·가져오기", "aops load"),
     Command("등록·배포", "aops configure"),
     Command("등록·배포", "aops validate"),
     Command("등록·배포", "aops register"),
@@ -107,7 +109,8 @@ def markdown(app: FastAPI) -> str:
         "- **인증:** Databricks OAuth 토큰을 `Authorization: Bearer`로 보냅니다. 사람은 U2M, 서비스는 서비스 주체 M2M입니다.",
         "- **오류:** 2xx가 아니면 본문은 `Problem`(RFC 9457)입니다. 화면은 `code`로 분기하고, `command`는 같은 일을 하는 CLI 명령입니다.",
         "- **목록:** `Page`로 옵니다. `next_cursor`를 다음 요청의 `cursor`로 넘깁니다.",
-        "- **오래 걸리는 일:** 검증·비교 실행·평가는 `202`와 상태를 돌려주고, `…/events`(SSE)로 진행을 흘립니다.",
+        "- **오래 걸리는 일:** 검증·비교 실행·평가는 `202`와 상태를 돌려주고, `…/events`(SSE)로 진행을 흘립니다. "
+        "Databricks Apps 앞단이 오래 열린 응답·스트림을 끊을 수 있으므로, SSE는 10초 이하 간격으로 신호를 보내고 끊기면 `Last-Event-ID`로 이어 받습니다.",
         "- **실행 스트림:** 턴 실행 스트림은 AG-UI 이벤트입니다(`threadId`=세션, `runId`=턴). aops만의 정보는 `CUSTOM` 이벤트(`aops.handoff`, `aops.skill`, `aops.guardrail`, `aops.usage`)로 옵니다.",
         "- **값:** 상태·종류 같은 열거형은 영문 코드입니다. 한글 표시는 화면이 붙입니다.",
         "- **지금 상태:** 요청·응답 형식만 정해져 있고, 기능은 아직 `501`을 돌려줍니다.",

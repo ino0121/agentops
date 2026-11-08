@@ -12,7 +12,7 @@
 - **인증:** Databricks OAuth 토큰을 `Authorization: Bearer`로 보냅니다. 사람은 U2M, 서비스는 서비스 주체 M2M입니다.
 - **오류:** 2xx가 아니면 본문은 `Problem`(RFC 9457)입니다. 화면은 `code`로 분기하고, `command`는 같은 일을 하는 CLI 명령입니다.
 - **목록:** `Page`로 옵니다. `next_cursor`를 다음 요청의 `cursor`로 넘깁니다.
-- **오래 걸리는 일:** 검증·비교 실행·평가는 `202`와 상태를 돌려주고, `…/events`(SSE)로 진행을 흘립니다.
+- **오래 걸리는 일:** 검증·비교 실행·평가는 `202`와 상태를 돌려주고, `…/events`(SSE)로 진행을 흘립니다. Databricks Apps 앞단이 오래 열린 응답·스트림을 끊을 수 있으므로, SSE는 10초 이하 간격으로 신호를 보내고 끊기면 `Last-Event-ID`로 이어 받습니다.
 - **실행 스트림:** 턴 실행 스트림은 AG-UI 이벤트입니다(`threadId`=세션, `runId`=턴). aops만의 정보는 `CUSTOM` 이벤트(`aops.handoff`, `aops.skill`, `aops.guardrail`, `aops.usage`)로 옵니다.
 - **값:** 상태·종류 같은 열거형은 영문 코드입니다. 한글 표시는 화면이 붙입니다.
 - **지금 상태:** 요청·응답 형식만 정해져 있고, 기능은 아직 `501`을 돌려줍니다.
@@ -41,6 +41,13 @@
 | `aops memory forget` | `DELETE /api/v1/projects/{project_id}/memory/{memory_id}` |
 | `aops add` | `POST /api/v1/projects/{project_id}/components` |
 | `aops remove` | `DELETE /api/v1/projects/{project_id}/components/{kind}/{name}` |
+
+### 찾기·가져오기
+
+| 명령 | API |
+| --- | --- |
+| `aops list` | `GET /api/v1/agents` |
+| `aops load` | `POST /api/v1/agents/{agent_id}/load`<br>`GET /api/v1/agents/{agent_id}/versions/{version}/archive` |
 
 ### 등록·배포
 
@@ -101,7 +108,6 @@
 | `POST /api/v1/release-gates/{gate_id}/reject` | 반려 | console [반려] |
 | `POST /api/v1/release-gates/{gate_id}/cancel` | 요청 취소 (요청자) | console 배포 요청 |
 | `POST /api/v1/approvals/external` | 외부 결재 결과 받기 (확장용) |  |
-| `GET /api/v1/agents` | 에이전트 목록 (레지스트리) | console 레지스트리 |
 | `GET /api/v1/agents/{agent_id}` | 에이전트 보기 | console 레지스트리 |
 | `GET /api/v1/agents/{agent_id}/versions` | 버전 목록 | console 레지스트리 |
 | `GET /api/v1/agents/{agent_id}/versions/{version}` | 버전 보기 (스킬 포함) | console 레지스트리 |

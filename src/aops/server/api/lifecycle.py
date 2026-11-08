@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from ..common import DBX, Page, command, pending, todo
 from ..events import ProgressEvent
-from .registry import AgentProduction, AgentVersion, Deployment, ValidationRun
+from .registry import AgentVersion, Deployment, ValidationRun
 
 router = APIRouter(tags=["검증·등록·배포"])
 
@@ -27,18 +27,32 @@ class ValidationCreate(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    version: str | None = Field(None, examples=["1.2.0"], description="`--version`. 비우면 `[release] version`")
+    version: str | None = Field(None, examples=["1.2.0"], description="`--version`. 비우면 register가 매긴다 (최초 1.0.0)")
+    bump: Literal["fix", "minor", "major"] | None = Field(None, description="버전을 올리는 폭. 비우면 register 규칙을 따른다")
 
 
 class DeployRequest(BaseModel):
-    version: str = Field(examples=["1.2.0"])
+    version: str | None = Field(None, examples=["1.2.0"], description="배포할 등록 버전. 노코드는 비운다(개발용 정의를 스냅샷으로 뜬다). 되돌리기는 이전 버전")
+    reason: str | None = Field(None, examples=["벤치마크 문항 보강"], description="요청 사유")
     target_workspace: str | None = Field(None, description="`--target`. 비우면 현재 워크스페이스")
     dev: bool = Field(False, description="`--dev`: 승인 없는 개인 시험 배포 (agent-bricks-d<사용자 해시 4자>-<이름>)")
 
 
 class PromoteRequest(BaseModel):
-    version: str = Field(examples=["1.2.0"], description="이전 운영 버전을 주면 되돌리기")
-    expected_version: str | None = Field(None, examples=["1.1.0"], description="`--expected-version`: 동시 변경 방지")
+    principals: list[str] = Field(
+        examples=[["group:finance-analysts", "user:user@example.com", "sp:1b2c3d4e-0000-0000-0000-000000000000"]],
+        description="`--to`: `group:<그룹 이름>`·`user:<이메일>`·`sp:<application ID>`",
+    )
+    revoke: bool = Field(False, description="`--revoke`: 권한 회수")
+
+
+class Grant(BaseModel):
+    agent_id: str
+    securable: str = Field(examples=["skill:main.aops.price-helper__pine-sql-style"], description="권한을 건 플랫폼 객체 (스킬, 운영용 Genie, 앱)")
+    principal: str = Field(examples=["group:finance-analysts"])
+    permission: str = Field(examples=["CAN_RUN", "CAN_USE", "READ_VOLUME"], description="노코드 CAN RUN, 코드 앱 CAN USE, 스킬 UC Skill 읽기")
+    granted: bool = Field(description="false면 회수된 것")
+    at: datetime
 
 
 class Approval(BaseModel):
@@ -114,26 +128,30 @@ async def stream_validation(validation_run_id: str) -> AsyncIterable[ProgressEve
 
 
 @router.post(
-    "/projects/{project_id}/registrations", status_code=201, summary="버전 등록 (후보 → registered)",
-    **command("aops register", DBX, note="스킬은 스냅샷과 해시만 남긴다. 게시는 운영 지정(`promote`) 때 한다."),
+    "/projects/{project_id}/registrations", status_code=201, summary="버전 저장 (최초 1.0.0)",
+    **command("aops register", DBX, note="검증을 요구하지 않는다(강제는 deploy 요청의 Gate). 에이전트 볼륨에 버전 zip을 한 번만 쓴다. 스킬은 첫 등록 때 UC Skill을 만든다(소유 aops 서비스 주체, 읽는 사람 없음). 코드는 UC 모델 버전도 만든다. 노코드는 deploy가 성공할 때 자동 등록한다."),
 )
 def register(project_id: str, body: RegisterRequest) -> AgentVersion:
     raise todo("aops register")
 
 
 @router.post(
-    "/projects/{project_id}/deploy-requests", status_code=201, summary="배포 요청 (심사 대기)",
-    **command("aops deploy", DBX, note="승인되면 배포 Job이 시험 앱(`agent-bricks-<base>-s`)에 배포한다. `dev=true`면 승인 없이 개인 시험 배포를 시작하고 배포를 돌려준다."),
+    "/projects/{project_id}/deploy-requests", status_code=201, summary="운영 반영 요청 (Gate → 승인 → 배포 Job)",
+    **command("aops deploy", DBX, note="Gate(검증·평가 결과)를 확인하고 승인을 받으면 배포 Job이 운영 버전을 내보낸다: 노코드 운영용 Genie Agent 복제, 코드 운영 앱 배포, 스킬 레지스트리 상태 운영과 UC Skill 내용. 노코드는 `version` 없이 요청하고 Gate가 개발용 정의를 스냅샷으로 뜬다. 같은 에이전트에 진행 중인 요청이 있으면 409. 되돌리기는 이전 버전을 deploy한다. `dev=true`면 승인 없이 개인 시험 배포를 시작하고 배포를 돌려준다."),
 )
 def deploy(project_id: str, body: DeployRequest) -> ReleaseGate | Deployment:
     raise todo("aops deploy")
 
 
 @router.post(
-    "/agents/{agent_id}/promote", summary="운영 버전 지정 (되돌리기 포함)",
-    **command("aops promote", DBX, note="같은 스냅샷을 운영 앱(노코드는 운영 Genie space)에 배포하고 확인한 뒤 운영 포인터를 바꾼다. 스킬 기반은 이때 Unity Gateway Skills에 게시한다. 되돌리기는 이전 버전의 스냅샷을 다시 배포·게시한다."),
+    "/agents/{agent_id}/promote", summary="대상자 권한 부여",
+    **command("aops promote", DBX, note=(
+        "노코드는 deploy 때 자동으로 공개 그룹에 CAN RUN, 코드는 운영 앱 CAN USE, 스킬은 UC Skill READ_VOLUME(있어야 load 가능). "
+        "요청자는 담당자·담당 팀, 운영 버전이 있어야 하고, 대상과 보안 등급별 공개 범위를 서버가 검사한다. "
+        "권한의 정본은 플랫폼 권한(UC grants 등)이고, 이력은 agent_events에 남는다."
+    )),
 )
-def promote(agent_id: str, body: PromoteRequest) -> AgentProduction:
+def promote(agent_id: str, body: PromoteRequest) -> list[Grant]:
     raise todo("aops promote")
 
 

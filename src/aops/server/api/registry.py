@@ -8,7 +8,7 @@ codes stored in Delta; screens translate them to Korean labels.
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, Field
 
 from ..common import DBX, Link, Page, command, todo
@@ -17,8 +17,8 @@ router = APIRouter(tags=["레지스트리"])
 
 BuildType = Literal["skill", "code", "no_code"]
 Lifecycle = Literal["registered", "production", "archived"]
-VersionStatus = Literal["candidate", "registered"]
-RunStatus = Literal["queued", "running", "passed", "failed", "error"]
+VersionStatus = Literal["registered", "production", "retired"]
+RunStatus = Literal["queued", "running", "passed", "failed", "stale", "error"]
 
 
 class Agent(BaseModel):
@@ -58,7 +58,7 @@ class AgentVersion(BaseModel):
     version: str = Field(examples=["1.2.0"])
     status: VersionStatus
     source_sha256: str | None = Field(None, description="고등급(소스 없음)이면 비어 있음")
-    artifact_path: str | None = Field(None, examples=["/Volumes/main/aops/agent_artifacts/agents/price-helper/1.2.0/ab12….tar.gz"])
+    artifact_path: str | None = Field(None, examples=["/Volumes/main/aops/price-helper/1.2.0.zip"], description="에이전트 볼륨의 버전 zip (한 번만 씀)")
     harness_sha256: str | None = None
     skills_sha256: str | None = None
     git_commit: str | None = Field(None, examples=["ff6530d"])
@@ -90,7 +90,7 @@ class ValidationRun(BaseModel):
     source_sha256: str | None = None
     policy_version: int = Field(examples=[4])
     mode: Literal["job", "local"] = Field("job", description="local은 참고용이고 등록 근거가 되지 않는다")
-    status: RunStatus
+    status: RunStatus = Field(description="`stale`: 점검 중에 개발용 정의가 바뀜 (노코드)")
     steps: list[ValidationStep] = Field(default_factory=list)
     scores: dict[str, float] = Field(default_factory=dict, examples=[{"correctness": 0.86, "relevance": 0.91, "safety": 1.0, "latency_p90_s": 7.2}])
     redteam_pass_rate: float | None = Field(None, examples=[0.97])
@@ -105,8 +105,8 @@ class Deployment(BaseModel):
     gate_id: str | None = Field(None, description="`--dev` 개인 시험 배포는 비어 있음")
     agent_id: str
     version: str
-    environment: Literal["dev", "staging", "production"] = Field(description="dev: 개인 시험 배포, staging: 승인된 deploy의 시험 앱, production: promote의 운영 앱")
-    app_name: str = Field(examples=["agent-bricks-price-helper-s"], description="실제 앱 이름 (agent-bricks-<base>, 시험은 -s)")
+    environment: Literal["dev", "production"] = Field(description="dev: 개인 시험 배포, production: 승인된 deploy의 운영 반영")
+    app_name: str = Field(examples=["agent-bricks-price-helper"], description="실제 앱 이름(agent-bricks-<base>) 또는 운영용 Genie Agent 이름. 스킬은 비어 있음")
     app_url: str | None = None
     status: Literal["running", "succeeded", "failed"]
     dependencies_match: bool | None = Field(None, description="앱에 깔린 의존 버전이 등록 때 uv.lock과 같은지")
@@ -129,7 +129,7 @@ class AgentEvent(BaseModel):
     event_id: str
     agent_id: str
     version: str | None = None
-    event_type: Literal["register", "validate", "gate_requested", "gate_approved", "gate_rejected", "deploy", "promote", "rollback"]
+    event_type: Literal["register", "validate", "gate_requested", "gate_approved", "gate_rejected", "deploy", "promote", "rollback", "load"]
     actor: str
     at: datetime
     detail: dict[str, Any] = Field(default_factory=dict)
@@ -137,13 +137,55 @@ class AgentEvent(BaseModel):
 
 @router.get(
     "/agents", summary="에이전트 목록 (레지스트리)",
-    **command(None, DBX, screen="console 레지스트리"),
+    **command("aops list", DBX, screen="console 레지스트리", note="권한이 없는 에이전트도 목록에는 보인다. 가져오기(load)만 막는다."),
 )
 def list_agents(
     build_type: BuildType | None = None, lifecycle: Lifecycle | None = None, owner: str | None = None,
     q: str | None = None, cursor: str | None = None, limit: int = Query(50, le=200),
 ) -> Page[AgentStatus]:
-    raise todo(None)
+    raise todo("aops list")
+
+
+class LoadArchive(BaseModel):
+    url: str = Field(examples=["/api/v1/agents/price-helper/versions/1.2.0/archive"], description="버전 zip을 받는 이 서버의 경로")
+    sha256: str = Field(description="안에 든 파일 내용의 해시 (CLI가 풀기 전에 확인)")
+    size_bytes: int
+
+
+class LoadInfo(BaseModel):
+    """What `aops load` needs: a link for no-code and code agents, the version zip for skill agents."""
+
+    agent_id: str
+    build_type: BuildType
+    version: str = Field(examples=["1.2.0"], description="가져오는 버전 (기본: 운영 버전)")
+    link: str | None = Field(None, description="노코드: 운영용 Genie Agent, 코드: Databricks App 주소")
+    archive: LoadArchive | None = Field(None, description="스킬: 에이전트 폴더로 풀 버전 zip")
+    allowed: bool = Field(description="false면 권한이 없다 (목록에는 보이지만 가져올 수 없음)")
+
+
+class LoadRequest(BaseModel):
+    version: str | None = Field(None, description="`--version`: 비우면 운영 버전. 다른 버전은 담당자만")
+
+
+@router.post(
+    "/agents/{agent_id}/load", summary="에이전트 가져오기",
+    **command("aops load", DBX, note=(
+        "노코드는 운영용 Genie Agent 링크, 코드는 앱 링크. 스킬은 서버가 판정한다: 요청자 신원 → 버전(기본 운영 버전, 다른 버전은 담당자·담당 팀만, "
+        "운영 버전이 없으면 409) → 담당자·담당 팀이 아니면 요청자의 전달 토큰으로 UC Skill의 SKILL.md를 읽어 본다(200 허용, 404 거부, UC가 그룹 소속까지 계산. `files` 범위가 막힌 워크스페이스는 서비스 주체가 실효 권한을 조회) → 없으면 403. "
+        "통과하면 버전 zip 경로와 해시를 주고 agent_events에 load를 남긴다. CLI는 해시를 확인하고 풀어 하네스 설정을 만든 뒤 세션을 연다."
+    )),
+)
+def load(agent_id: str, body: LoadRequest) -> LoadInfo:
+    raise todo("aops load")
+
+
+_ARCHIVE = command("aops load", DBX, note="`load`와 같은 판정을 거친다. 서버(서비스 주체)가 에이전트 볼륨의 `<version>.zip`을 읽어 내준다. 대상자에게는 볼륨 권한을 주지 않는다.")
+_ARCHIVE["responses"] = {200: {"content": {"application/zip": {}}, "description": "버전 zip"}, **_ARCHIVE["responses"]}
+
+
+@router.get("/agents/{agent_id}/versions/{version}/archive", summary="버전 zip 받기", response_class=Response, **_ARCHIVE)
+def get_archive(agent_id: str, version: str) -> Response:
+    raise todo("aops load")
 
 
 @router.get("/agents/{agent_id}", summary="에이전트 보기", **command(None, DBX, screen="console 레지스트리"))
