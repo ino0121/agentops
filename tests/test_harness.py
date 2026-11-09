@@ -16,8 +16,17 @@ def test_codex_read_picks_final_answer_tools_skills_and_usage():
     turn = codex.read(events, native_session="t1")
     assert turn.text == "done"
     assert turn.tools == ["shell", "skill:maple-sql-style", "dbsql.query"]
-    assert turn.usage == {"total": {"totalTokens": 10}}
+    assert turn.usage == {"total": {"totalTokens": 10}, "turn": {"totalTokens": 10}}
     assert turn.native_session == "t1" and turn.events is events
+
+
+def test_codex_turn_usage_is_this_turn_only():
+    def usage(total, last):
+        return {"method": "thread/tokenUsage/updated", "payload": {"tokenUsage": {
+            "total": {"inputTokens": total, "outputTokens": 1}, "last": {"inputTokens": last, "outputTokens": 1}}}}
+    # the thread had 100 input tokens before; this turn made two model calls of 30 and 40
+    turn = codex.read([usage(130, 30), usage(170, 40)], native_session="t1")
+    assert turn.usage["turn"] == {"inputTokens": 70, "outputTokens": 1}
 
 
 def test_codex_read_without_final_phase_uses_last_message():

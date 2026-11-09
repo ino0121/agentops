@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aops-cli"
-version = "0.1.0.dev0"
+version = "0.1.0.dev1"
 description = "Manage the AI agent lifecycle on top of existing harnesses and platforms"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,7 +14,7 @@ dependencies = []
 claude = ["claude-agent-sdk>=0.2.176"]
 codex = ["openai-codex>=0.163.0"]
 serve = ["fastapi>=0.162", "uvicorn>=0.54", "python-multipart>=0.0.20"]
-dbx = ["databricks-sdk>=0.158"]
+dbx = ["databricks-sdk>=0.158", "mlflow>=3.1"]
 
 [project.scripts]
 aops = "aops.cli:main"

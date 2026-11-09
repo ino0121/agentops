@@ -145,6 +145,14 @@ class Store:
             )
         return cursor.lastrowid
 
+    def set_trace(self, turn_id: int, info: dict[str, Any]) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (f"trace:{turn_id}", json.dumps(info)))
+
+    def trace_of(self, turn_id: int) -> dict[str, Any] | None:
+        row = self._one("SELECT value FROM state WHERE key = ?", f"trace:{turn_id}")
+        return json.loads(row["value"]) if row else None
+
     # raw events
     def append_events(self, session_id: str, segment_id: int, turn_id: int, harness: str,
                       events: list[dict[str, Any]]) -> Path:

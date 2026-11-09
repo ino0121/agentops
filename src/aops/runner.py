@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from . import handoff, harness
+from . import handoff, harness, trace
 from .project import Project
 from .store import Store, now
 from .sync import sync
@@ -53,6 +53,11 @@ def run_turn(project: Project, prompt: str, *, harness_name: str | None = None, 
     turn_id = store.add_turn(session["id"], segment["id"], prompt=prompt, sent=sent, response=turn.text,
                              tools=turn.tools, usage=turn.usage, started_at=started_at)
     store.append_events(session["id"], segment["id"], turn_id, name, turn.events)
-    return {"session": session["id"], "segment": segment["id"], "turn": turn_id, "harness": name,
-            "harness_version": version, "handoff_turns": len(unseen), "response": turn.text,
-            "tools": turn.tools, "usage": turn.usage}
+    result = {"session": session["id"], "segment": segment["id"], "turn": turn_id, "harness": name,
+              "harness_version": version, "handoff_turns": len(unseen), "response": turn.text,
+              "tools": turn.tools, "usage": turn.usage, "model": turn.model}
+    info = trace.export_turn(project, {**result, "prompt": prompt, "started_at": started_at, "ended_at": now()})
+    if info:
+        store.set_trace(turn_id, info)
+    result["trace"] = info
+    return result

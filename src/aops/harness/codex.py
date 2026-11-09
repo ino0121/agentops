@@ -44,13 +44,19 @@ class CodexHarness:
             for event in thread.turn(prompt).stream():
                 payload = event.payload.model_dump(mode="json", by_alias=True) if hasattr(event.payload, "model_dump") else event.payload
                 events.append({"method": event.method, "payload": payload})
-        return read(events, native_session=thread.id)
+            turn = read(events, native_session=thread.id)
+            try:
+                turn.model = thread.read().thread.model
+            except Exception:  # the model name is for records only
+                turn.model = self.model
+        return turn
 
 
 def read(events: list[dict[str, Any]], native_session: str | None) -> Turn:
     """Answer, tools, skills and usage from raw app-server notifications."""
     turn = Turn(text="", native_session=native_session, events=events)
     messages: list[tuple[str | None, str]] = []  # (phase, text)
+    updates: list[dict[str, Any]] = []
     for event in events:
         payload = event.get("payload") or {}
         if event.get("method") == "item/completed":
@@ -66,8 +72,20 @@ def read(events: list[dict[str, Any]], native_session: str | None) -> Turn:
                     if f"skill:{skill}" not in turn.tools:
                         turn.tools.append(f"skill:{skill}")
         elif event.get("method") == "thread/tokenUsage/updated":
-            turn.usage = payload.get("tokenUsage") or payload.get("token_usage") or {}
+            updates.append(payload.get("tokenUsage") or payload.get("token_usage") or {})
+    if updates:
+        turn.usage = {**updates[-1], "turn": turn_usage(updates)}
     # Same rule as the SDK: the last final answer, else the last message.
     finals = [text for phase, text in messages if phase == "final_answer"]
     turn.text = finals[-1] if finals else (messages[-1][1] if messages else "")
     return turn
+
+
+def turn_usage(updates: list[dict[str, Any]]) -> dict[str, int]:
+    """Tokens of this turn alone. `total` counts the whole thread and `last` one model call, so the turn is
+    the final total minus the total before the turn's first call."""
+    first, final = updates[0], updates[-1]
+    end = final.get("total") or final.get("last") or {}
+    start, first_call = first.get("total") or {}, first.get("last")
+    before = {k: v - first_call.get(k, 0) for k, v in start.items() if isinstance(v, int)} if first_call else {}
+    return {k: v - before.get(k, 0) for k, v in end.items() if isinstance(v, int)}

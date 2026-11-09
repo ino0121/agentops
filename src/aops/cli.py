@@ -38,6 +38,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         handoff = f" · handoff {result['handoff_turns']} turn(s)" if result["handoff_turns"] else ""
         tools = f" · tools {', '.join(result['tools'])}" if result["tools"] else ""
         print(f"\n[{result['harness']} {result['harness_version']}{handoff}{tools}]")
+        if result.get("trace"):
+            print(f"기록: MLflow trace {result['trace']['trace_id']}  {result['trace']['experiment']}")
     return 0
 
 
@@ -62,11 +64,18 @@ def cmd_session(args: argparse.Namespace) -> int:
             print("no session")
             return 1
         print(f"session {session['id']} · next harness {session['harness']}")
+        first = next((store.trace_of(t["id"]) for t in store.turns(session["id"]) if store.trace_of(t["id"])), None)
+        if first:
+            print(f"MLflow: {first['experiment']}  {first['experiment_url']}")
         for segment in store.segments(session["id"]):
             print(f"\nsegment {segment['id']} · {segment['harness']} {segment['harness_version']} · {segment['native_session']}")
             for turn in (t for t in store.turns(session["id"]) if t["segment_id"] == segment["id"]):
                 tools = f"  [{', '.join(turn['tools'])}]" if turn["tools"] else ""
-                print(f"  {turn['id']:>3}. {_short(turn['prompt'])}\n       → {_short(turn['response'])}{tools}")
+                handed = "  (인계받음)" if turn["sent"] != turn["prompt"] else ""
+                print(f"  {turn['id']:>3}. {_short(turn['prompt'])}{handed}\n       → {_short(turn['response'])}{tools}")
+                info = store.trace_of(turn["id"])
+                if info:
+                    print(f"       trace {info['trace_id']}")
     return 0
 
 

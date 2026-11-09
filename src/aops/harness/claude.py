@@ -41,6 +41,7 @@ class ClaudeHarness:
         async for message in query(prompt=prompt, options=options):
             turn.events.append({"type": type(message).__name__, **_plain(message)})
             if isinstance(message, AssistantMessage):
+                turn.model = getattr(message, "model", None) or turn.model
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         texts.append(block.text)

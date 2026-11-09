@@ -26,7 +26,8 @@ class Turn:
     text: str
     native_session: str | None
     tools: list[str] = field(default_factory=list)
-    usage: dict[str, Any] = field(default_factory=dict)
+    usage: dict[str, Any] = field(default_factory=dict)  # the harness's own report, as received
+    model: str | None = None  # model that answered, as the harness names it
     events: list[dict[str, Any]] = field(default_factory=list)  # raw harness output, as received
 
 
