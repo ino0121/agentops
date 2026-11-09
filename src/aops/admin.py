@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any
 
 STEPS = ("tables", "policy", "dist", "app", "grants")
-REPO = Path(__file__).resolve().parents[2]
+PACKAGE = Path(__file__).resolve().parent
+REPO = PACKAGE.parents[1]  # the source checkout, when aops runs from one
 APP_REQUIREMENTS = "fastapi>=0.162\nuvicorn>=0.54\npython-multipart>=0.0.20\ndatabricks-sdk>=0.158\n"
 
 
@@ -90,6 +91,9 @@ def cmd_admin(args: argparse.Namespace) -> int:
         print(f"\n[dist] Job용 aops 패키지: uv build → /Volumes/{catalog}/{schema}/aops_dist/")
         if args.apply:
             sql.run(f"CREATE VOLUME IF NOT EXISTS {args.registry}.aops_dist COMMENT 'aops validate·배포 Job이 설치하는 aops 패키지'")
+            if not (REPO / "pyproject.toml").is_file():
+                raise SystemExit("aops: dist 단계는 aops 저장소를 받은 폴더에서 실행합니다 (uv build). "
+                                 "git clone 뒤 그 폴더에서 uv run --extra dbx aops admin setup ...")
             out = Path(tempfile.mkdtemp(prefix="aops-dist-"))
             subprocess.run(["uv", "build", "--wheel", "--out-dir", str(out)], cwd=REPO, check=True, capture_output=True)
             wheel = next(out.glob("aops_cli-*.whl"))
@@ -143,7 +147,7 @@ def _deploy_app(w: Any, args: argparse.Namespace, wheel_path: str | None, me: st
         app = w.apps.create_and_wait(App(name=args.app, description="aops 서버: console 화면과 /api/v1",
                                          resources=[resource], user_api_scopes=["files"]))
     build = Path(tempfile.mkdtemp(prefix="aops-app-"))
-    shutil.copytree(REPO / "src" / "aops", build / "src" / "aops", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(PACKAGE, build / "src" / "aops", ignore=shutil.ignore_patterns("__pycache__"))
     (build / "requirements.txt").write_text(APP_REQUIREMENTS)
     env = [{"name": "PYTHONPATH", "value": "src"}, {"name": "AOPS_REGISTRY", "value": args.registry},
            {"name": "AOPS_WAREHOUSE_ID", "valueFrom": "sql-warehouse"}, {"name": "AOPS_DIST_WHEEL", "value": wheel_path or ""}]
