@@ -7,6 +7,7 @@ from starlette.exceptions import HTTPException
 
 from .. import __version__
 from .api import admin, batches, evaluations, lifecycle, meta, monitor, ops, projects, registry, sessions
+from ..dbx.service import ServiceError
 from .common import NotImplementedYet, Problem, bearer
 
 PREFIX = "/api/v1"
@@ -64,6 +65,10 @@ def create_app(*, edition: str = "custom", cors_origins: list[str] | None = None
     async def not_implemented(_: Request, exc: NotImplementedYet) -> JSONResponse:
         what = f"`{exc.command}`에 해당하는 API" if exc.command else "이 API"
         return problem(501, "not_implemented", "아직 구현되지 않았습니다", f"{what}는 형식만 정해졌습니다.", exc.command)
+
+    @app.exception_handler(ServiceError)
+    async def service_error(_: Request, exc: ServiceError) -> JSONResponse:
+        return problem(exc.status, exc.code, exc.message, command=exc.command)
 
     @app.exception_handler(HTTPException)
     async def http_error(_: Request, exc: HTTPException) -> JSONResponse:

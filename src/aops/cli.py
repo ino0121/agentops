@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import __version__, harness, init
+from . import __version__, admin, harness, init, lifecycle
 from .project import Project
 from .runner import run_turn
 from .store import Store
@@ -23,8 +23,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     project = init.create(Path.cwd(), args.name, harness=args.harness, edition=args.edition)
     print(f"created {project.root}")
     for folder in project.skill_folders():
-        print(f"  skill {folder.name}")
-    print(f"next: cd {args.name} && aops run \"공급가액 12,000원의 부가세와 합계는?\"")
+        note = "  (템플릿: 폴더 이름과 SKILL.md를 내 스킬로 바꿔 쓰세요)" if folder.name == init.TEMPLATE_SKILL else ""
+        print(f"  skill {folder.name}{note}")
+    print(f"next: cd {args.name} → SPEC.md, agent/instructions.md, agent/skills/를 채운 뒤 aops run \"<질문>\"")
     return 0
 
 
@@ -37,6 +38,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         handoff = f" · handoff {result['handoff_turns']} turn(s)" if result["handoff_turns"] else ""
         tools = f" · tools {', '.join(result['tools'])}" if result["tools"] else ""
         print(f"\n[{result['harness']} {result['harness_version']}{handoff}{tools}]")
+        if result.get("trace"):
+            print(f"기록: MLflow trace {result['trace']['trace_id']}  {result['trace']['experiment']}")
     return 0
 
 
@@ -61,11 +64,18 @@ def cmd_session(args: argparse.Namespace) -> int:
             print("no session")
             return 1
         print(f"session {session['id']} · next harness {session['harness']}")
+        first = next((store.trace_of(t["id"]) for t in store.turns(session["id"]) if store.trace_of(t["id"])), None)
+        if first:
+            print(f"MLflow: {first['experiment']}  {first['experiment_url']}")
         for segment in store.segments(session["id"]):
             print(f"\nsegment {segment['id']} · {segment['harness']} {segment['harness_version']} · {segment['native_session']}")
             for turn in (t for t in store.turns(session["id"]) if t["segment_id"] == segment["id"]):
                 tools = f"  [{', '.join(turn['tools'])}]" if turn["tools"] else ""
-                print(f"  {turn['id']:>3}. {_short(turn['prompt'])}\n       → {_short(turn['response'])}{tools}")
+                handed = "  (인계받음)" if turn["sent"] != turn["prompt"] else ""
+                print(f"  {turn['id']:>3}. {_short(turn['prompt'])}{handed}\n       → {_short(turn['response'])}{tools}")
+                info = store.trace_of(turn["id"])
+                if info:
+                    print(f"       trace {info['trace_id']}")
     return 0
 
 
@@ -123,6 +133,11 @@ def parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1", help="기본 127.0.0.1 (이 PC에서만)")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--cors-origin", action="append", help="브라우저에서 직접 부를 화면 주소 (여러 번 가능)")
+
+    for name, handler in lifecycle.add_commands(sub).items():
+        COMMANDS[name] = lambda args, handler=handler: lifecycle.run(handler, args)
+    admin.add_command(sub)
+    COMMANDS["admin"] = admin.cmd_admin
     return root
 
 

@@ -18,7 +18,7 @@ name = "{name}"
 edition = "{edition}"              # local | dbx | omni | custom
 
 [agent]
-harness = "{harness}"              # claude | codex
+harness = "{harness}"              # 새 세션의 기본 하네스 (claude | codex). 세션 중 바꾸기: aops session switch
 instructions = "agent/instructions.md"
 skills = ["agent/skills/*"]
 
@@ -28,8 +28,10 @@ handoff_tokens = {{ codex = 2000, claude = 4000 }}
 
 DBX_TOML = """
 [dbx]
-profile = ""                   # Databricks CLI 프로필
-server = ""                    # aops 서버 주소 (https://<app>.databricksapps.com)
+profile = ""                   # Databricks CLI 프로필. 환경변수 AOPS_PROFILE이 있으면 그것을 씀
+server = ""                    # aops 서버 주소 (https://<app>.databricksapps.com). 환경변수 AOPS_SERVER가 있으면 그것을 씀
+trace = true                   # aops run마다 개발 trace를 MLflow 실험에 남김 (false면 끔)
+experiment = ""                # trace를 남길 MLflow 실험 (비우면 /Users/<나>/aops/<이름>)
 """
 
 SPEC_MD = """\
@@ -42,7 +44,7 @@ owner_group:
 service_criticality: medium    # low | medium | high
 data_sensitivity: internal     # public | internal | confidential | personal
 security_level: general
-description: 부가세가 포함된 금액을 계산하고 설명한다
+description: 이 에이전트가 하는 일을 한 줄로 적습니다 (에이전트 목록에 보입니다)
 ---
 
 # {name}
@@ -51,34 +53,89 @@ description: 부가세가 포함된 금액을 계산하고 설명한다
 """
 
 INSTRUCTIONS_MD = """\
-당신은 가격 계산을 돕는 에이전트입니다.
+당신은 {name} 에이전트입니다.
 
-- 금액 계산은 `vat-calculator` 스킬의 규칙을 따릅니다.
-- 답은 한국어로, 표를 먼저 보여 주고 계산 과정을 짧게 덧붙입니다.
+- 질문에 맞는 스킬이 있으면 그 스킬의 규칙을 따릅니다.
+- 답은 한국어로 짧고 정확하게 합니다.
 """
+
+TEMPLATE_SKILL = "my-skill"
 
 SKILL_MD = """\
 ---
-name: vat-calculator
-description: 한국 부가가치세(10%)를 계산한다. 공급가액, 부가세, 합계 금액을 묻는 질문에 쓴다.
+name: my-skill
+description: 이 스킬을 언제 쓰는지 한 줄로 적습니다. 하네스는 이 설명을 보고 스킬을 고릅니다.
 ---
 
-# 부가세 계산
+# my-skill (스킬 템플릿)
 
-1. 부가세 = 공급가액 × 10%. 원 단위 미만은 버린다.
-2. 합계 = 공급가액 + 부가세.
-3. 합계만 주어지면 공급가액 = 합계 ÷ 1.1(원 미만 버림), 부가세 = 합계 − 공급가액.
-4. 답은 `공급가액 | 부가세 | 합계` 표로, 천 단위 쉼표를 붙여 보여 준다.
+폴더 이름과 위 `name`을 같은 스킬 이름으로 바꾸고(소문자·숫자·하이픈), 아래에 규칙을 적습니다.
+스킬을 더 만들려면 `agent/skills/<이름>/SKILL.md`를 같은 형식으로 추가합니다.
+
+1. 지켜야 할 규칙이나 계산 순서
+2. 답의 형식
 """
 
 QUESTIONS_YAML = """\
+# 이 에이전트가 잘 답해야 하는 질문 (평가·비교에 씁니다)
 questions:
   - id: q1
-    text: 공급가액 12,000원의 부가세와 합계는?
-  - id: q2
-    text: 합계 55,000원이면 공급가액과 부가세는 얼마야?
-  - id: q3
-    text: 공급가액 9,999원짜리 3개를 사면 합계는?
+    text: 여기에 질문을 적습니다
+"""
+
+README_MD = """\
+# {name}
+
+aops로 만든 스킬 기반 에이전트입니다. **원본만 고치면** Claude Code·Codex 설정은 aops가 만듭니다.
+
+## 폴더 구조
+
+```text
+{name}/
+├── README.md                 [안내] 이 파일
+├── SPEC.md                   [고침] 에이전트 설명서
+├── aops.toml                 [고침] aops 설정 (필요할 때)
+├── agent/
+│   ├── instructions.md       [고침] 지시: 역할, 답하는 방식
+│   └── skills/
+│       └── my-skill/
+│           └── SKILL.md      [고침] 스킬 템플릿: 폴더 이름과 내용을 내 스킬로
+├── evals/
+│   └── questions.yaml        [고침] 평가 질문
+├── CLAUDE.md, AGENTS.md      [aops] Claude Code·Codex용 지시
+├── .claude/skills/           [aops] Claude Code용 스킬 사본
+├── .agents/skills/           [aops] Codex용 스킬 사본
+└── .aops/, runs/             [aops] 세션·대화 기록
+```
+
+[고침] 사람이 고치는 원본 · [aops] aops가 원본에서 만드는 것 (고치지 않음)
+
+`aops run`을 하면 실행 직전에 aops가 원본(`agent/instructions.md`, `agent/skills/`)에서
+`CLAUDE.md`·`AGENTS.md`와 스킬 사본을 다시 맞춥니다. 사본을 손으로 고치면 aops가 덮어쓰지 않고 알려 줍니다.
+
+## 고칠 곳
+
+1. `SPEC.md` — `description`(한 줄 설명), `owner`·`owner_group`(담당자·담당 팀, 비우면 등록한 사람),
+   `service_criticality`·`data_sensitivity`·`security_level`(승인 정책이 보는 값)
+2. `agent/instructions.md` — 이 에이전트의 역할과 답하는 방식. Claude·Codex가 같이 받습니다
+3. `agent/skills/my-skill/` — 폴더 이름을 스킬 이름으로 바꾸고(소문자·숫자·하이픈), `SKILL.md`의
+   `name`(폴더 이름과 같게)·`description`(언제 쓰는지)·본문(규칙)을 채웁니다.
+   스킬을 더 만들려면 `agent/skills/<이름>/SKILL.md`를 같은 형식으로 추가합니다 ([Agent Skills](https://agentskills.io) 형식)
+4. `evals/questions.yaml` — 이 에이전트가 잘 답해야 하는 질문
+
+## 쓰는 법
+
+```bash
+aops run "<질문>"                      # 실행
+aops session switch --harness codex    # 다음 턴부터 다른 하네스 (대화는 이어짐)
+aops session show                      # 이 세션의 기록 (하네스 구간, 쓴 스킬)
+{dbx_usage}```
+"""
+
+DBX_USAGE = """\
+aops register                          # 버전 저장 (aops 서버, 볼륨·UC Skill)
+aops deploy                            # 검사 → 승인 → 운영 반영
+aops list                              # 등록된 에이전트 목록
 """
 
 GITIGNORE = "runs/\n.aops/\n"
@@ -91,10 +148,11 @@ def create(parent: Path, name: str, *, harness: str = "claude", edition: str = "
     if (root / CONFIG_FILE).exists():
         raise ValueError(f"{root} is already an aops project")
     files = {
+        "README.md": README_MD.format(name=name, dbx_usage=DBX_USAGE if edition != "local" else ""),
         CONFIG_FILE: AOPS_TOML.format(name=name, harness=harness, edition=edition) + (DBX_TOML if edition != "local" else ""),
         "SPEC.md": SPEC_MD.format(name=name),
-        "agent/instructions.md": INSTRUCTIONS_MD,
-        "agent/skills/vat-calculator/SKILL.md": SKILL_MD,
+        "agent/instructions.md": INSTRUCTIONS_MD.format(name=name),
+        f"agent/skills/{TEMPLATE_SKILL}/SKILL.md": SKILL_MD,
         "evals/questions.yaml": QUESTIONS_YAML,
         ".gitignore": GITIGNORE,
     }
