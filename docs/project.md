@@ -1,48 +1,98 @@
 # 프로젝트 폴더와 aops.toml
 
-[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md)
+[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md)
 
-`aops init`이 만드는 폴더입니다.
+## 지금 `aops init`이 만드는 폴더 (스킬 기반)
 
 ```text
 my-agent/
-├── pyproject.toml        aops 버전 고정 (uv 프로젝트)
-├── uv.lock               aops + 하네스 + 상위 SDK의 정확한 버전
-├── aops.toml             프로젝트 정의 (모든 설정의 기준)
-├── SPEC.md               에이전트 정보 (등록할 때 쓰는 15개 필드)
+├── README.md                 [안내] 폴더 구조, 고칠 곳, 쓰는 법
+├── SPEC.md                   [고침] 에이전트 설명서 (레지스트리에 들어가는 값)
+├── aops.toml                 [고침] aops 설정
 ├── agent/
-│   ├── instructions.md   하네스 공통 지시
-│   ├── skills/<name>/SKILL.md
-│   └── tools.toml        MCP 서버·도구 선언
-├── guardrails/
-│   ├── rules.toml        2층 규칙
-│   └── redteam.yaml      가드레일 시험 사례
+│   ├── instructions.md       [고침] 하네스 공통 지시
+│   └── skills/
+│       └── my-skill/
+│           └── SKILL.md      [고침] 스킬 템플릿: 폴더 이름과 내용을 내 스킬로
 ├── evals/
-│   ├── questions.yaml    배치 질문
-│   └── datasets/         정답이 있는 평가 데이터
-├── memory/               장기 메모리 (Markdown, 승인된 항목만)
-├── AGENTS.md  CLAUDE.md  .codex/  .claude/  .agents/skills/
-│                         하네스 프로젝트 설정 (aops가 aops.toml에서 만든다)
-├── agent.toml            (dbx) Agent Bricks 프로젝트 선언
-├── runtime/              (dbx) DurableAgentServer 진입점
-├── databricks.yml        (dbx) 번들
-├── runs/                 세션·원본 이벤트·local MLflow (git 제외)
-└── .aops/                인계 파일, 배치 칸 작업 폴더 (git 제외)
+│   └── questions.yaml        [고침] 평가 질문
+├── .gitignore                runs/, .aops/
+├── CLAUDE.md  AGENTS.md      [aops] Claude Code·Codex용 지시 (instructions.md 전체 사본)
+├── .claude/skills/           [aops] Claude Code용 스킬 사본
+├── .agents/skills/           [aops] Codex용 스킬 사본
+├── runs/                     [aops] 세션·턴·원본 이벤트 (SQLite)
+└── .aops/                    [aops] 인계 파일, 설정 생성 기록
 ```
 
+- **[고침]** 사람이 고치는 원본입니다. **[aops]**는 aops가 원본에서 만듭니다.
+- `aops run` 직전마다 aops가 원본(`agent/instructions.md`, `agent/skills/`)에서 하네스 설정을 다시 맞춥니다. 사본을 손으로 고치면 덮어쓰지 않고 알려 줍니다.
+- `aops register`의 버전 zip에는 원본만 들어갑니다. 하네스 설정(`CLAUDE.md`·`AGENTS.md`·`.claude/`·`.agents/`·`.codex/`)과 기록(`runs/`·`.aops/`)은 빼고, 받는 쪽(`aops load`)에서 다시 만듭니다.
+- 스킬은 [Agent Skills](https://agentskills.io) 형식입니다. 폴더 이름이 스킬 이름이고, `SKILL.md`의 `name`은 폴더 이름과 같아야 합니다. 하네스는 `description`을 보고 언제 이 스킬을 쓸지 고릅니다.
+- 템플릿(`my-skill`, SPEC·스킬의 템플릿 description)을 그대로 두면 `aops run`은 되지만 배포 요청의 검사(Gate)에서 반려됩니다.
+- 이 폴더에서 `claude`·`codex`를 직접 실행해도 같은 지시와 스킬을 씁니다. 다만 aops 세션 기록과 trace는 `aops run`일 때만 남습니다.
+
+### `SPEC.md`
+
+```yaml
+---
+agent_id: my-agent
+name: my-agent
+build_type: skill
+owner:                         # 비우면 처음 등록한 사람
+owner_group:                   # 담당 팀. 팀원 누구나 새 버전 등록·배포 요청
+service_criticality: medium    # low | medium | high
+data_sensitivity: internal     # public | internal | confidential | personal
+security_level: general
+description: 이 에이전트가 하는 일을 한 줄로 적습니다 (에이전트 목록에 보입니다)
+---
+```
+
+### `aops.toml`
+
 ```toml
-# aops.toml
 config_version = 1
 
 [project]
-name = "price-helper"
-edition = "local"              # local | dbx | omni | custom
+name = "my-agent"
+edition = "dbx"                # local | dbx | omni | custom
 
 [agent]
-harness = "claude"             # 기본 하네스: claude | codex
-model = "<model-name>"         # dbx에서는 Unity Gateway Model service 이름
+harness = "claude"             # 새 세션의 기본 하네스 (claude | codex). 세션 중 바꾸기: aops session switch
 instructions = "agent/instructions.md"
-skills = ["agent/skills/*"]
+skills = ["agent/skills/*"]    # 이 아래 스킬을 모두 씀
+
+[session]
+handoff_tokens = { codex = 2000, claude = 4000 }   # 하네스를 바꿀 때 넘길 앞 대화의 크기
+
+[dbx]                          # dbx 에디션일 때만 생김
+profile = ""                   # Databricks CLI 프로필. 환경변수 AOPS_PROFILE이 먼저
+server = ""                    # aops 서버 주소 (https://<app>.databricksapps.com). 환경변수 AOPS_SERVER가 먼저
+trace = true                   # aops run마다 개발 trace를 MLflow 실험에 남김
+experiment = ""                # 비우면 /Users/<나>/aops/<이름>
+```
+
+## 설계상 더 생길 것
+
+아래는 설계한 전체 구성입니다. 위에 없는 파일·키는 아직 만들지 않습니다.
+
+```text
+my-agent/
+├── pyproject.toml  uv.lock   aops·하네스·상위 SDK 버전 고정
+├── agent/tools.toml          MCP 서버·도구 선언
+├── guardrails/
+│   ├── rules.toml            2층 규칙
+│   └── redteam.yaml          가드레일 시험 사례
+├── evals/datasets/           정답이 있는 평가 데이터
+├── memory/                   장기 메모리 (Markdown, 승인된 항목만)
+├── .codex/                   Codex 프로젝트 설정
+├── agent.toml                (코드 기반) Agent Bricks 프로젝트 선언
+├── runtime/                  (코드 기반) DurableAgentServer 진입점
+└── databricks.yml            (코드 기반) 번들
+```
+
+```toml
+[agent]
+model = "<model-name>"         # dbx에서는 Unity Gateway Model service 이름
 tools = "agent/tools.toml"
 
 [guardrails]                   # 개발 중 시험용 스위치. 언제든 끄고 켤 수 있다
@@ -53,7 +103,6 @@ judge = "off"                  # 3층 판정 (Gateway를 쓰지 않을 때)
 
 [session]
 capture_terminal = true        # 터미널에서 직접 쓴 하네스 세션도 기록
-handoff_tokens = { codex = 2000, claude = 4000 }   # 인계 안내·파일 크기
 summarizer = "rules"           # rules | next-harness | <model-name>
 
 [memory]
@@ -62,35 +111,20 @@ review_writes = true           # 메모리 변경은 사용자 승인 후 반영
 harness_memory = "keep"        # 하네스 자체 메모리: keep | import | off
 
 [[variants]]                   # 배치 비교용 구성. 지정하지 않은 값은 위 설정을 따른다
-name = "claude-guard-on"
-rules = "enforce"
-
-[[variants]]
 name = "codex-guard-off"
 harness = "codex"
 rules = "off"
 
-[release]                      # 등록·배포할 구성. dbx·omni에서 배포 요청 전에 validate가 관리자 정책으로 검사한다
+[release]                      # 등록·배포할 구성
 spec = "SPEC.md"
 evals = "evals/datasets/main"
 
 [release.guardrails]           # 운영에서 켜 둘 가드레일. 개발 중 [guardrails]와 별개
-instructions = true
 rules = "enforce"
 gateway_policies = ["pii", "jailbreak"]
 
 [dbx]
-profile = "my-workspace"
-catalog = "main"
-schema = "agents"
-experiment = "/Users/<me>/aops/price-helper"   # 개발 기록은 기본으로 본인 폴더
-gateway = true                 # 모델 호출을 Unity Gateway로 (권장)
-registry = "main.aops"         # 레지스트리·승인 테이블 스키마 (조직 공통)
-validate_job = "aops-validate"
-server_app = "aops-server"
-approvers = "group:agent-approvers"   # 배포 승인 그룹. 요청자 본인은 승인할 수 없다
+gateway = true                 # 모델 호출을 Unity Gateway로
 ```
-
-`AGENTS.md`·`.claude/` 같은 하네스 설정은 `aops.toml`에서 만들어지는 생성물입니다. `aops.toml`이 바뀌면 다음 aops 명령이 다시 만들고, 사람이 직접 고친 부분이 있으면 덮어쓰기 전에 차이를 보여 주고 묻습니다. 사용자가 지우거나 끈 hook은 다시 넣지 않습니다.
 
 노코드 에이전트(Genie Agent)는 이 폴더에 정의를 두지 않습니다. Genie 화면에서 만들고 고치며, aops는 배포 요청 때 정의를 스냅샷으로 떠서 검사하고 배포합니다.

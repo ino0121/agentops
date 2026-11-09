@@ -1,6 +1,8 @@
 # aops 개요
 
-[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md)
+[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md)
+
+> **지금 동작하는 범위:** 스킬 기반 에이전트의 dbx 흐름(`init` → `run`·`session` → `register` → `deploy` → `list` → `promote` → `load`)입니다. 노코드는 연결 작업 중, 코드 기반은 다음 차례입니다. 나머지는 설계이고, 표의 **지금** 열과 [명령어](commands.md)에 구분해 두었습니다.
 
 ## 에이전트 3종
 
@@ -23,25 +25,25 @@
 
 1~5단계는 자유롭게 쓰고, 7단계 배포 요청부터 관리자 정책을 검사합니다. (dbx 에디션 기준)
 
-| 단계 | 하는 일 | Databricks 기능 | 명령 |
-| --- | --- | --- | --- |
-| 1. 만들기 | 새 에이전트·개발 화면 | Agent Bricks, Genie, Unity Gateway | `init` `dev` |
-| 2. 실험 | 구성별 비교 실행 | MLflow tracing, Sandbox | `run` |
-| 3. 세션 | 하네스 간 이어가기 | Agent sessions·memory | `session` |
-| 4. 평가 | 채점·가드레일 시험 | MLflow 평가, 서비스 정책 | `evaluate` |
-| 5. 등록 | 버전 저장 | Unity Catalog (Volume, 모델) | `register` |
-| 6. 검사 | 관리자 정책 자가 점검 | Lakeflow Jobs | `validate` |
-| 7. 배포 | 배포 요청 → 승인 → 운영 반영 | aops 서버(console 화면), Agent Runtime, Genie, Unity Gateway Skills | `deploy` |
-| 8. 운영 | 권한 부여·가져오기·모니터링 | Unity Catalog 권한, system tables, telemetry | `promote` `load` `monitor` |
+| 단계 | 하는 일 | Databricks 기능 | 명령 | 지금 (스킬 기반) |
+| --- | --- | --- | --- | --- |
+| 1. 만들기 | 새 에이전트·개발 화면 | Agent Bricks, Genie, Unity Gateway | `init` `dev` | `init` 동작 (스킬 템플릿) |
+| 2. 실험 | 구성별 비교 실행 | MLflow tracing, Sandbox | `run` | 질문 하나 실행, 턴마다 MLflow trace |
+| 3. 세션 | 하네스 간 이어가기 | Agent sessions·memory | `session` | 하네스 전환·인계 (세션은 내 PC) |
+| 4. 평가 | 채점·가드레일 시험 | MLflow 평가, 서비스 정책 | `evaluate` | 설계 |
+| 5. 등록 | 버전 저장 | Unity Catalog (Volume, 모델) | `register` | 동작 (Volume zip, UC Skill) |
+| 6. 검사 | 관리자 정책 자가 점검 | Lakeflow Jobs | `validate` | 동작 (검사 4가지) |
+| 7. 배포 | 배포 요청 → 승인 → 운영 반영 | aops 서버(console 화면), Agent Runtime, Genie, Unity Gateway Skills | `deploy` | 동작 (승인은 정책 자동 또는 API) |
+| 8. 운영 | 권한 부여·가져오기·모니터링 | Unity Catalog 권한, system tables, telemetry | `promote` `load` `monitor` | `promote`·`load`·`list` 동작, `monitor` 설계 |
 
 단계별로 쓰는 기능:
 
 - **만들기:** Agent Bricks CLI·AgentKit(`DurableAgentServer`)으로 배포와 같은 에이전트 서버를 로컬에서 띄웁니다. 모델은 Unity Gateway, 도구는 Databricks 제공 MCP·UC function·Genie를 씁니다.
-- **실험:** 실행마다 MLflow trace를 Unity Catalog에 남기고, Databricks Sandbox에서 격리해 실행할 수 있습니다.
+- **실험:** 실행마다 MLflow trace를 Unity Catalog에 남기고, Databricks Sandbox에서 격리해 실행할 수 있습니다. **지금:** `aops run`은 내 PC의 하네스로 돌고, trace는 내 MLflow 실험(`/Users/<나>/aops/<이름>`)에 턴마다 하나 남습니다(쓴 도구·스킬, 인계, 모델, 토큰, MLflow가 계산한 비용).
 - **세션:** 세션과 메모리를 Agent sessions·memory(Lakebase)에 저장해 다른 PC에서도 이어 갑니다.
 - **평가:** `mlflow.genai.evaluate`, UC 평가 데이터셋, Unity Gateway 서비스 정책(가드레일)을 씁니다.
 - **등록:** 에이전트마다 UC Volume을 하나 두고 버전을 zip으로 한 번만 씁니다. 코드 에이전트는 UC registered model 버전도 만듭니다.
-- **검사:** Lakeflow Job(서버리스)이 등록된 버전을 관리자 정책으로 검사합니다. 노코드는 Genie 벤치마크로 정확도와 회귀를 봅니다. 결과는 MLflow와 Delta 테이블에 남습니다.
+- **검사:** Lakeflow Job(서버리스)이 등록된 버전을 관리자 정책으로 검사합니다. 노코드는 Genie 벤치마크로 정확도와 회귀를 봅니다. 결과는 MLflow와 Delta 테이블에 남습니다. **지금:** validate Job(`aops-validate`)이 스킬 기반을 네 가지(형식·스킬·비밀값·기록)로 검사하고 `validation_runs`와 Job 출력에 남깁니다.
 - **배포:** 배포 요청은 검사 결과와 승인(console 화면)을 거칩니다. 그 뒤 배포 Job이 코드 에이전트는 운영 앱에, 노코드는 운영용 Genie Agent에, 스킬 기반은 Unity Gateway Skills의 내용에 반영합니다. 되돌리기는 이전 버전을 다시 배포합니다.
 - **운영:** `promote`가 대상자에게 Databricks 권한을 줍니다. system tables(사용량·비용·감사·쿼리), Apps telemetry, 예산 API로 운영 현황을 봅니다.
 
@@ -83,7 +85,7 @@ dbx는 local을 포함합니다. omni와 custom은 dbx 위에 화면을 붙이�
 ### aops 서버
 
 - dbx 이상은 조직에 aops 서버(Databricks App) 하나를 둡니다. 관리자가 `aops admin setup`으로 한 번 배포하고, 사용자는 CLI만 설치합니다.
-- 레지스트리 기록, Job 실행, 권한 변경은 서버가 서비스 주체로 합니다. 그래서 사람이 기록을 고치거나 자기 요청을 승인할 수 없습니다. 승인 화면(console)도 이 서버에 있습니다.
+- 레지스트리 기록, Job 실행, 권한 변경은 서버가 서비스 주체로 합니다. 그래서 사람이 기록을 고치거나 자기 요청을 승인할 수 없습니다. 승인 화면(console)도 이 서버에 있습니다. **지금:** API만 있고 console 화면은 아직 없습니다.
 - 개발(`init`·`run`·`session`·`evaluate` 등)은 서버 없이 됩니다. 등록·검사·배포·권한 부여와 스킬 `load`는 서버를 거칩니다.
 
 ### custom 에디션

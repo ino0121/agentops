@@ -1,47 +1,49 @@
 # aops 명령어
 
-[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md)
+[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md)
+
+> **지금** 열: ● 동작 (스킬 기반) · ◐ 일부 동작 · – 설계. 명령마다 **지금:** 줄에 현재 구현을 적었습니다. 노코드·코드 기반 경로는 아직 없습니다(코드 `register`는 501, `init`은 안내만).
 
 명령은 19개입니다. 개발자가 매일 쓰는 것은 개발 명령 7개입니다. 찾기·가져오기와 등록·배포는 dbx 이상에서만 쓰고, `admin`은 관리자만 씁니다. custom 에디션은 모든 명령이 dbx와 같고, 같은 기능을 `aops serve` API로도 씁니다.
 
 **개발 (모든 에디션, 강제 없음)**
 
-| 명령 | 하는 일 | local | dbx | omni |
-| --- | --- | :-: | :-: | :-: |
-| [`aops init`](#aops-init) | 새 에이전트 만들기 | ● | ● | ● |
-| [`aops dev`](#aops-dev) | 개발 화면 (Chat·Batch·Evaluate·기록·메모리) | ● | ● | ● |
-| [`aops run`](#aops-run) | 질문 하나, 또는 질문 파일 × 구성 × 반복(배치) | ● | ● | ● |
-| [`aops evaluate`](#aops-evaluate) | 채점, 가드레일 시험, 이어가기 시험 | ● | ● | ● |
-| [`aops session`](#aops-session) | 세션 보기·하네스 전환·가져오기·내보내기 | ● | ● | ● |
-| [`aops memory`](#aops-memory) | 장기 메모리 보기·승인·삭제 | ● | ● | ● |
-| [`aops add` · `remove`](#aops-add--remove) | 스킬·도구·MCP 추가·제거 | ● | ● | ● |
+| 명령 | 하는 일 | local | dbx | omni | 지금 |
+| --- | --- | :-: | :-: | :-: | :-: |
+| [`aops init`](#aops-init) | 새 에이전트 만들기 | ● | ● | ● | ◐ |
+| [`aops dev`](#aops-dev) | 개발 화면 (Chat·Batch·Evaluate·기록·메모리) | ● | ● | ● | – |
+| [`aops run`](#aops-run) | 질문 하나, 또는 질문 파일 × 구성 × 반복(배치) | ● | ● | ● | ◐ |
+| [`aops evaluate`](#aops-evaluate) | 채점, 가드레일 시험, 이어가기 시험 | ● | ● | ● | – |
+| [`aops session`](#aops-session) | 세션 보기·하네스 전환·가져오기·내보내기 | ● | ● | ● | ◐ |
+| [`aops memory`](#aops-memory) | 장기 메모리 보기·승인·삭제 | ● | ● | ● | – |
+| [`aops add` · `remove`](#aops-add--remove) | 스킬·도구·MCP 추가·제거 | ● | ● | ● | – |
 
 **찾기·가져오기 (dbx 이상)**
 
-| 명령 | 하는 일 | local | dbx | omni |
-| --- | --- | :-: | :-: | :-: |
-| [`aops list`](#aops-list) | 등록된 에이전트 목록 | – | ● | ● |
-| [`aops load`](#aops-load) | 등록된 에이전트를 가져와 쓰기 | – | ● | ● |
+| 명령 | 하는 일 | local | dbx | omni | 지금 |
+| --- | --- | :-: | :-: | :-: | :-: |
+| [`aops list`](#aops-list) | 등록된 에이전트 목록 | – | ● | ● | ● |
+| [`aops load`](#aops-load) | 등록된 에이전트를 가져와 쓰기 | – | ● | ● | ● |
 
 **등록·배포 (dbx·omni, 배포 요청부터 관리자 정책을 코드로 강제)**
 
-| 명령 | 하는 일 | local | dbx | omni |
-| --- | --- | :-: | :-: | :-: |
-| [`aops configure`](#aops-configure) | Databricks·Omnigent 연결, 에디션 이전 | – | ● | ● |
-| [`aops register`](#aops-register) | 버전 저장 | – | ● | ● |
-| [`aops validate`](#aops-validate) | 관리자 정책 검사 (배포 전 자가 점검) | 참고용 | ● | ● |
-| [`aops deploy`](#aops-deploy) | 운영 반영 (검사·승인 뒤) | – | ● | ● |
-| [`aops promote`](#aops-promote) | 대상자 권한 부여 | – | ● | ● |
+| 명령 | 하는 일 | local | dbx | omni | 지금 |
+| --- | --- | :-: | :-: | :-: | :-: |
+| [`aops configure`](#aops-configure) | Databricks·Omnigent 연결, 에디션 이전 | – | ● | ● | – |
+| [`aops register`](#aops-register) | 버전 저장 | – | ● | ● | ● |
+| [`aops validate`](#aops-validate) | 관리자 정책 검사 (배포 전 자가 점검) | 참고용 | ● | ● | ● |
+| [`aops deploy`](#aops-deploy) | 운영 반영 (검사·승인 뒤) | – | ● | ● | ◐ |
+| [`aops promote`](#aops-promote) | 대상자 권한 부여 | – | ● | ● | ● |
 
 **운영·관리**
 
-| 명령 | 하는 일 | local | dbx | omni |
-| --- | --- | :-: | :-: | :-: |
-| [`aops monitor`](#aops-monitor) | 사용량·예산·비용, 운영 중인 에이전트와 MCP | ● | ● | ● |
-| [`aops doctor`](#aops-doctor) | 설치·버전·설정 점검 | ● | ● | ● |
-| [`aops harness`](#aops-harness) | 하네스 설치·버전 관리 | ● | ● | ● |
-| [`aops admin`](#aops-admin) | 조직 공통 자원 준비, 관리자 정책 | – | ● | ● |
-| [`aops serve`](#aops-serve) | aops API 서버 (custom: Custom Front 연결) | – | ● | ● |
+| 명령 | 하는 일 | local | dbx | omni | 지금 |
+| --- | --- | :-: | :-: | :-: | :-: |
+| [`aops monitor`](#aops-monitor) | 사용량·예산·비용, 운영 중인 에이전트와 MCP | ● | ● | ● | – |
+| [`aops doctor`](#aops-doctor) | 설치·버전·설정 점검 | ● | ● | ● | – |
+| [`aops harness`](#aops-harness) | 하네스 설치·버전 관리 | ● | ● | ● | – |
+| [`aops admin`](#aops-admin) | 조직 공통 자원 준비, 관리자 정책 | – | ● | ● | ◐ |
+| [`aops serve`](#aops-serve) | aops API 서버 (custom: Custom Front 연결) | – | ● | ● | ◐ |
 
 ## 개발
 
@@ -58,6 +60,7 @@ aops init <name> [--type skill|code|no-code] [--harness claude|codex] [--edition
 - 하네스 프로젝트 설정을 만듭니다. 이 폴더에서 `claude`·`codex`를 직접 실행해도 aops 설정과 기록이 적용됩니다. 하네스에서 이 폴더와 hook을 신뢰로 승인해야 하고, 회사 관리 설정이 프로젝트 hook을 막지 않아야 합니다.
 - 예시 질문 3개와 기본 가드레일 규칙을 넣고, 끝나면 `aops dev`를 엽니다. `--no-ui`면 열지 않습니다.
 - omni: 같은 정의로 Omnigent 에이전트 YAML을 만듭니다.
+- **지금:** `--type skill`만 폴더를 만듭니다: `README.md`·`SPEC.md`·`aops.toml`·`agent/instructions.md`·스킬 템플릿 `agent/skills/my-skill/`·`evals/questions.yaml`과 하네스 설정([프로젝트 폴더](project.md)). `uv sync`, 가드레일 규칙, `aops dev` 열기, `--no-ui`는 아직 없습니다. `--type code`·`no-code`는 어디서 만드는지 안내만 합니다. 폴더에서 `claude`·`codex`를 직접 실행하면 지시·스킬은 같지만 aops 세션 기록과 trace는 남지 않습니다(hook 없음).
 
 ### `aops dev`
 
@@ -65,6 +68,7 @@ aops init <name> [--type skill|code|no-code] [--harness claude|codex] [--edition
 aops dev [--port <port>] [--host 127.0.0.1]
 ```
 
+- **지금:** 없습니다 (설계).
 - 로컬 개발 화면을 띄웁니다. 탭은 Chat, Batch, Evaluate, 기록, 메모리입니다.
 - 가드레일 층별 스위치, 하네스·모델·스킬·도구 선택도 이 화면에서 합니다. 바꾼 값은 `aops.toml`에 저장됩니다.
 - dbx: 모델은 Unity Gateway Model services, 도구는 Databricks 제공 MCP·UC MCP service, 스킬은 Unity Gateway Skills, 기록은 MLflow trace에서 고르고 봅니다. 실행 위치로 내 PC 또는 Databricks Sandbox를 고릅니다.
@@ -84,6 +88,7 @@ aops run <questions.yaml> [--variants a,b] [--repeat N] [--concurrency N] [--jso
 - 구독 로그인은 한도가 개인 사용 기준이라, 구독 로그인 배치는 기본 동시 실행 수를 낮게 둡니다. 큰 배치는 API 키나 Unity Gateway를 권합니다.
 - dbx: 칸 하나가 MLflow trace 하나입니다(`batch_id`·`variant`·`question_id` 태그).
 - omni: Omnigent 세션으로 실행합니다.
+- **지금:** 질문 하나만 실행합니다(`--harness`, `--json`). 내 PC에 설치된 `claude`(Claude Agent SDK)·`codex`(`codex app-server`)를 띄우고, 모델 호출은 각 하네스 설정을 따릅니다. dbx 에디션이고 `[dbx] trace = true`면 턴마다 내 MLflow 실험에 trace 하나를 남깁니다: `agent.turn` 아래 `llm.<모델>`(토큰, MLflow가 계산한 비용), `aops.handoff`, `tool.*`·`tool.skill.<이름>`. 배치는 설계입니다.
 
 ### `aops evaluate`
 
@@ -93,6 +98,7 @@ aops evaluate --suite redteam [--variants a,b] [--target deployed]
 aops evaluate --suite handoff
 ```
 
+- **지금:** 없습니다 (설계).
 - 원할 때 채점합니다. `mlflow.genai.evaluate`를 쓰고 결과는 항상 MLflow에 남깁니다.
 - `--suite redteam`: 가드레일 시험입니다. `guardrails/redteam.yaml`의 사례로 층별 차단·통과·오탐을 표로 냅니다. `--variants`로 가드레일을 켠 구성과 끈 구성을 나란히 비교하고, `--target deployed`면 배포된 에이전트를 시험합니다.
 - `--suite handoff`: 하네스를 바꿔도 맥락이 이어지는지 시험합니다.
@@ -104,8 +110,9 @@ aops evaluate --suite handoff
 
 ```bash
 aops session list
-aops session show <id>
+aops session show [<id>]
 aops session switch --harness claude|codex
+aops session new [--harness claude|codex]
 aops session import --from claude|codex [--session <id>]
 aops session export <id>
 ```
@@ -116,6 +123,7 @@ aops session export <id>
 - `export`: 하네스와 무관한 형식(JSON)으로 내보냅니다.
 - 터미널에서 직접 쓴 하네스 세션의 기록은 `[session] capture_terminal`(개발 화면 스위치)로 켜고 끕니다.
 - dbx: 세션을 Agent sessions에 저장해 다른 PC나 Databricks Sandbox에서 이어 갑니다.
+- **지금:** `list`·`show`·`switch`·`new`가 동작합니다. 세션은 프로젝트의 `runs/`(SQLite)에 있고, `show`는 MLflow 실험 주소, 구간별 하네스, 턴마다 인계 여부·쓴 도구·스킬·trace ID를 보여 줍니다. `import`·`export`, 터미널 기록, Agent sessions 저장은 설계입니다.
 
 ### `aops memory`
 
@@ -126,6 +134,7 @@ aops memory accept <id>
 aops memory forget <id>
 ```
 
+- **지금:** 없습니다 (설계).
 - 하네스가 제안한 메모리 변경을 보고 승인(`accept`)하거나 지웁니다(`forget`). 승인한 항목만 장기 메모리가 됩니다(`[memory] review_writes`).
 - local: `memory/`에 Markdown으로 저장하고, 검색은 SQLite로 합니다.
 - dbx: Agent memory stores에 저장하고, 저장소 단위로 권한을 줍니다.
@@ -139,6 +148,7 @@ aops add mcp <name|url>
 aops remove skill|tool|mcp <name>
 ```
 
+- **지금:** 없습니다 (설계). 스킬은 `agent/skills/<이름>/SKILL.md`를 직접 만들면 다음 `aops run`부터 쓰입니다.
 - `skill`: `SKILL.md` 폴더를 `agent/skills/`에 넣고 하네스별 위치에 배치합니다. 형식은 추가할 때 검사합니다.
 - `tool`·`mcp`: local은 로컬 MCP 서버를 `agent/tools.toml`에 등록합니다. dbx는 Databricks 제공 MCP(`system.ai.web_search`, `system.ai.dbsql`, 코드 실행 `system.ai.sandbox` 등), UC MCP service, UC function, Genie를 붙이고, Agent Bricks 프로젝트에는 `agentbricks tools add`로 반영합니다.
 - 조직에 스킬을 올리는 일은 `register`(처음 만들기)와 `deploy`(운영 버전으로 맞추기)가 합니다.
@@ -153,11 +163,12 @@ aops list [--type skill|code|no-code]
 
 - 레지스트리에 등록된 에이전트를 유형별로 보여 줍니다(이름, 담당, 운영 버전, 상태).
 - 권한이 없는 에이전트도 목록에는 보입니다. 가져오기(`load`)만 막습니다.
+- **지금:** 동작합니다. 레지스트리 뷰 `agent_status`를 읽어 에이전트·종류·운영 버전·최신 버전·상태·담당을 보여 줍니다.
 
 ### `aops load`
 
 ```bash
-aops load <agent_id> [--version x.y.z]
+aops load <agent_id> [--version x.y.z] [--dir <폴더>]
 ```
 
 - 노코드: 운영용 Genie Agent 링크를 엽니다.
@@ -167,17 +178,20 @@ aops load <agent_id> [--version x.y.z]
   - 권한이 없으면 "담당자에게 promote를 요청하세요"를 보여 줍니다.
 - `--version`: 운영 버전이 아닌 버전은 담당자·담당 팀만 가져옵니다.
 - 가져온 폴더는 사본입니다. 새 운영 버전이 나오면 세션을 열 때 알려 주고, `aops load`로 다시 받습니다. 고친 내용은 `register`로 새 버전을 만듭니다.
+- **지금:** 스킬 기반이 동작합니다. 빈 폴더(기본 `./<agent_id>`)에 풀고 해시를 확인한 뒤 하네스 설정을 만듭니다. 하네스 세션은 열지 않으니 그 폴더에서 `aops run`으로 씁니다. 받는 사람의 기록은 그 사람의 MLflow 실험에 남습니다. 새 운영 버전 알림과 노코드·코드 링크는 설계입니다.
 
 ## 등록·배포 (dbx·omni)
 
 조직 배포는 항상 아래 순서로만 합니다. 내 PC에서 바로 조직 배포를 하지 않습니다. 등록·검증·배포 요청은 모두 aops 서버를 거칩니다.
 
-1. `aops register`: 버전 저장 → `agent_versions` (노코드는 5에서 자동)
-2. `aops validate`: 등록된 버전을 Lakeflow Job이 관리자 정책으로 검사 → `validations`
-3. `aops deploy`: 배포 요청 → 검사 결과 확인 → `deploy_requests`
-4. console 화면: 승인 그룹이 [승인]·[반려] → `approvals` (정책에 따라 자동 승인)
-5. 배포 Job: 승인 기록 재확인 → 운영 반영 → `deployments`, `production`
+1. `aops register`: 버전 저장 → `agents`·`agent_versions`·`agent_version_skills` (노코드는 5에서 자동)
+2. `aops validate`: 등록된 버전을 Lakeflow Job이 관리자 정책으로 검사 → `validation_runs` (배포 요청 때 결과가 없으면 자동으로 돌림)
+3. `aops deploy`: 배포 요청 → 검사 결과 확인 → `release_gates`
+4. console 화면: 승인 그룹이 [승인]·[반려] → `approvals` (정책에 따라 자동 승인). **지금:** console 화면 대신 정책 자동 승인 또는 aops 서버 API
+5. 배포 Job: 승인 기록 재확인 → 운영 반영 → `deployments`, `agent_production`
 6. `aops promote --to <대상>`: 대상자 권한 부여
+
+모든 단계가 `agent_events`에 감사 이력을 남깁니다.
 
 ### `aops configure`
 
@@ -185,6 +199,7 @@ aops load <agent_id> [--version x.y.z]
 aops configure [--edition dbx|omni] [--dry-run]
 ```
 
+- **지금:** 없습니다 (설계). `aops.toml [dbx]`의 `profile`·`server`를 직접 적거나 환경변수 `AOPS_PROFILE`·`AOPS_SERVER`를 씁니다.
 - Databricks CLI 프로필, 카탈로그·스키마·Experiment·Unity Gateway Model service·SQL warehouse를 확인해 `aops.toml [dbx]`에 저장합니다.
 - 조직 공통 레지스트리·validate Job·aops 서버가 있는지와 내 권한(읽기·요청·승인)을 확인합니다.
 - 프리뷰(Sandbox, Unity Gateway Skills, Agent memory, 서비스 정책 등) 상태를 확인하고, 꺼진 기능은 local 구현을 쓰도록 `[providers]`를 제안합니다.
@@ -204,11 +219,12 @@ aops register [--version x.y.z] [--bump fix|minor|major]
 - 노코드: 따로 실행하지 않습니다. 배포에 성공하면 배포 Job이 그 정의로 버전을 등록합니다.
 - Delta `agents`·`agent_versions`에 버전 해시, 하네스·SDK 버전, UC 모델 버전, SPEC 정보를 남깁니다.
 - omni: Omnigent 에이전트로도 등록합니다.
+- **지금:** 스킬 기반이 동작합니다. 담당자·담당 팀만 새 버전을 등록하고, 마지막 버전과 내용이 같거나 이미 있는 버전 번호면 막습니다. UC Skill 이름은 `<registry>.<agent_id>__<스킬 이름>`이고 주인은 aops 서버 서비스 주체입니다. `agent_versions`에는 해시·zip 경로·크기·스킬 해시·기본 하네스·SPEC을 남깁니다(SDK·UC 모델 버전은 설계). 코드·노코드는 501을 돌려줍니다.
 
 ### `aops validate`
 
 ```bash
-aops validate [--local]
+aops validate [--version x.y.z] [--local]
 ```
 
 배포 전에 돌려 보는 자가 점검입니다. 배포 요청이 이 결과를 요구하고, 결과가 없으면 배포 요청 때 자동으로 돌립니다.
@@ -224,11 +240,12 @@ aops validate [--local]
 - 노코드는 검사하는 동안 Genie Agent 정의가 바뀌면 판정하지 않고 "점검 중 수정됨(`stale`)"으로 남깁니다. 배포는 검사한 스냅샷으로 하므로, 검사하지 않은 수정이 운영에 섞이지 않습니다.
 - 개발 중 기록에 기대지 않습니다. 개발 중 trace나 평가를 했는지는 보지 않고, 필요한 증거는 이 Job이 직접 만듭니다. 개발 중 hook을 꺼 둔 사람도 불리하지 않습니다.
 - `--local`: 같은 단계를 내 PC에서 돌립니다. 결과는 참고용이고 배포 근거가 되지 않습니다. local 에디션에는 이 방식만 있습니다.
+- **지금:** validate Job(`aops-validate`, 서버리스, 서비스 주체 실행)이 스킬 기반을 네 가지로 검사합니다: `format`(SPEC.md 필수 항목과 허용 값), `skills`(Agent Skills 형식, 이름 = 폴더 이름, description 1~1024자), `secrets`(토큰·키 패턴, 금지 파일), `record`(볼륨의 zip이 등록 때 해시와 같은지). `init` 템플릿을 고치지 않은 채(`my-skill`, SPEC·스킬의 템플릿 description)면 `format`·`skills`에서 반려합니다. Job 화면의 설명과 실행 출력에 검사 대상·규칙·실행 코드·검사별 결과가 남고, 결과는 `validation_runs`에 들어갑니다. 평가·가드레일·호환 검사와 `--local`은 설계입니다.
 
 ### `aops deploy`
 
 ```bash
-aops deploy [--version x.y.z] [--target <workspace>]
+aops deploy [--version x.y.z] [--reason <이유>] [--target <workspace>]
 aops deploy --dev
 ```
 
@@ -244,6 +261,13 @@ aops deploy --dev
 - **운영 기록:** 배포된 에이전트에 MLflow tracing과 Apps telemetry를 켭니다. 정책에 따라 켜지는 조직 서비스의 기록이라, 에이전트를 쓰는 최종 사용자 쪽에서는 끌 수 없습니다.
 - **`--dev`:** 승인 없이 본인 앱(`agent-bricks-d<사용자 해시>-<name>`)으로 배포합니다. 세션·메모리처럼 배포해야만 시험할 수 있는 기능을 위한 개인 시험 배포입니다. 운영 버전이 되지 않고, `promote` 대상이 아니며, console 화면의 운영 목록에 나오지 않습니다.
 - omni: Omnigent 관리형 에이전트로 게시하고 정책을 함께 넣습니다.
+- **지금:** 스킬 기반이 동작합니다.
+  - 같은 버전을 다시 요청하면 진행 중인 요청을 이어서 보여 주고, 다른 버전의 요청이 진행 중이면 막습니다.
+  - 이 버전·이 정책으로 통과한 검사가 없으면 validate Job을 먼저 돌립니다(`exempt`면 건너뜀). 실패하면 승인자에게 가기 전에 반려합니다.
+  - 승인: 정책이 `auto`면 `policy:auto`로 자동 승인합니다. `required`면 승인자가 aops 서버 API(`POST /api/v1/release-gates/{gate_id}/approve`)로 합니다. console 화면은 설계입니다. `optional`은 아직 `required`와 같게 동작합니다(검사 방식 `optional`도 `mandatory`와 같음).
+  - 배포 Job(`aops-deploy`, 서비스 주체 실행)이 승인과 zip 해시를 다시 확인하고, 스킬마다 UC Skill 내용을 이 버전으로 바꿉니다. CLI는 단계마다 한 줄씩 보여 줍니다.
+  - 운영 버전보다 낮은 버전을 `--version`으로 배포하면 되돌리기(`rollback`)로 기록합니다.
+  - `--dev`, `--target`, 운영 기록 켜기, 가드레일 패키지는 설계입니다.
 
 ### `aops promote`
 
@@ -258,6 +282,7 @@ aops promote <agent_id> --to group:<그룹> [--to user:<이메일>] [--to sp:<ap
 - 그룹은 계정 그룹이어야 합니다. 작업 공간 그룹에는 Unity Catalog 권한을 줄 수 없습니다.
 - 운영 버전이 있어야 합니다. 요청자는 담당자·담당 팀이어야 하고, 서버가 보안 등급별 공개 범위를 검사합니다.
 - 권한은 Databricks 권한(Unity Catalog, 앱·Genie 권한)으로 걸리고 Databricks가 강제합니다. aops는 부여·회수 이력을 남깁니다.
+- **지금:** 스킬 기반이 동작합니다(UC Skill `READ_VOLUME` 부여·회수, `agent_events`에 기록). 담당자·담당 팀이 운영 버전이 있을 때만 할 수 있습니다. 보안 등급별 공개 범위 검사는 설계입니다.
 
 ## 운영·관리
 
@@ -267,6 +292,8 @@ aops promote <agent_id> --to group:<그룹> [--to user:<이메일>] [--to sp:<ap
 aops monitor [--me | --all] [--watch] [--web]
 aops monitor dashboard
 ```
+
+**지금:** 없습니다 (설계). 개발 중 사용량·비용은 MLflow trace(`aops run`)에서 봅니다.
 
 개인 사용자와 관리자가 사용량·예산과 운영 중인 에이전트를 한곳에서 봅니다. 주 화면은 console 화면의 Monitor이고(`--web`), CLI는 같은 데이터를 표로 보여 줍니다(`--watch`로 주기 갱신).
 
@@ -290,6 +317,7 @@ aops doctor
 aops doctor --fix sync|migrate
 ```
 
+- **지금:** 없습니다 (설계).
 - 설치 버전과 호환표, 인증, 프리뷰, 프로젝트·hook 신뢰 상태, 하네스 설정을 덮어쓰는 회사 관리 설정, Unity Gateway 주소·토큰이 함께 설정됐는지를 점검합니다.
 - dbx: 앱 사용자 권한 범위의 허용 목록, Unity Gateway Skills를 쓸 수 있는지(프리뷰, Compliance Security Profile), 레지스트리 스키마에 넓은 권한이 걸려 있지 않은지도 봅니다.
 - 결과는 알림입니다. 자동으로 고치지 않고, 사용자가 일부러 끈 것(hook, 기록, 가드레일)은 문제가 아니라 "꺼짐"으로 표시합니다.
@@ -304,6 +332,7 @@ aops harness install|use claude|codex[@<version>] [--untested]
 aops harness upgrade claude|codex
 ```
 
+- **지금:** 없습니다 (설계). 하네스는 사용자가 설치한 `claude`·`codex`를 그대로 씁니다.
 - 호환표의 고정 버전을 uv로 설치·전환합니다. `--untested`로 검증 전 버전도 경고와 함께 쓸 수 있습니다.
 - `upgrade`: 호환표의 다음 버전으로 올리고, 녹화된 출력 재생 시험을 통과하지 못하면 되돌립니다.
 - dbx: `ug`(Unity Gateway CLI)로 하네스를 Unity Gateway에 연결합니다.
@@ -311,7 +340,9 @@ aops harness upgrade claude|codex
 ### `aops admin`
 
 ```bash
-aops admin setup [--apply]
+aops admin setup --profile <프로필> --registry <catalog>.<schema> --warehouse <SQL warehouse ID> \
+  [--app aops-server] [--validation-mode mandatory|optional|exempt] [--approval-mode required|optional|auto] \
+  [--approver-group <그룹>] [--only tables,policy,dist,app,grants] [--apply]
 aops admin policy set <policy.toml>
 aops admin policy show|diff
 ```
@@ -327,6 +358,14 @@ aops admin policy show|diff
 - custom이면 Custom Front가 쓸 그룹·서비스 주체에도 aops 서버 앱의 `CAN USE`를 줍니다 (앱을 따로 만들지 않습니다).
 - 권한 부여는 미리 보여 주고 `--apply`일 때만 실행합니다.
 - `policy`: 관리자 정책을 올리고 버전을 관리합니다.
+- **지금:** `setup`이 다섯 단계로 동작합니다. 미리보기가 기본이고 `--apply`일 때만 실행합니다.
+  1. `tables`: 레지스트리 테이블 13개와 뷰 `agent_status`
+  2. `policy`: 옵션의 검사·승인 방식으로 정책 버전을 올림 (`policy` 명령 대신)
+  3. `dist`: Job이 설치할 aops 패키지를 빌드해 볼륨 `aops_dist`에 올림
+  4. `app`: aops 서버(Databricks App)를 배포하고 레지스트리·웨어하우스·패키지 경로를 환경변수로 넣음
+  5. `grants`: 서버 서비스 주체에 카탈로그·스키마·`aops_dist` 권한 (사람에게는 사용·조회만)
+  - validate·배포 Job은 서버가 처음 쓸 때 서비스 주체로 만들고, 서버의 패키지·설명이 바뀌면 Job 설정을 맞춥니다.
+  - 번들 배포, monitor 뷰, 태그 정책, Apps telemetry, `policy` 명령은 설계입니다.
 
 ### `aops serve`
 
@@ -343,3 +382,4 @@ dbx 기능을 HTTP API 서버로 엽니다. 조직의 웹·서비스가 자기 �
 - **실행:** 하네스는 세션마다 Databricks Sandbox에서 돕니다. 프로젝트는 Workspace 폴더(Git 폴더)나 UC Volume에 둡니다.
 - 화면 없이 API만 엽니다. 요청·응답 형식은 `/api/v1/docs`에서 보고, 명령 ↔ API 대응은 `GET /api/v1/meta/commands`로 받습니다.
 - `--cors-origin`: 다른 도메인의 브라우저 화면이 직접 부를 때 허용할 주소입니다. 조직 서버에서 띄울 때만 씁니다.
+- **지금:** 동작합니다. 환경변수 `AOPS_REGISTRY`·`AOPS_WAREHOUSE_ID`(Job용 `AOPS_DIST_WHEEL`)가 있으면 스킬 기반의 11개 경로가 레지스트리에 연결되고, 없으면 모든 경로가 `501`입니다([API](api.md)). 하네스 실행(대화 경로)과 Sandbox는 아직 없습니다.
