@@ -51,10 +51,22 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0 if run["status"] == "passed" else 1
 
 
+def _poll(server: Server, path: str, tries: int = 5) -> dict[str, Any]:
+    """GET while waiting on a Job. A passing server error (restart, write conflict) is asked again."""
+    for attempt in range(tries):
+        try:
+            return server.request("GET", path)
+        except ServerError as error:
+            if error.status < 500 or attempt == tries - 1:
+                raise
+            time.sleep(3)
+    raise AssertionError("unreachable")
+
+
 def _wait_validation(server: Server, run_id: str) -> dict[str, Any]:
     last = None
     while True:
-        run = server.request("GET", f"/validations/{run_id}")
+        run = _poll(server, f"/validations/{run_id}")
         if run["status"] != last:
             _say(f"  검사 {run['status']}")
             last = run["status"]
@@ -77,7 +89,7 @@ def cmd_deploy(args: argparse.Namespace) -> int:
          f"승인 {gate['approval_mode']})")
     seen: set[str] = set()
     while True:
-        detail = server.request("GET", f"/release-gates/{gate['gate_id']}")
+        detail = _poll(server, f"/release-gates/{gate['gate_id']}")
         state = (detail["decision"], detail.get("deployment_status"))
         if state not in seen:
             seen.add(state)

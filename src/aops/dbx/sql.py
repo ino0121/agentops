@@ -7,6 +7,9 @@ import time
 from typing import Any
 
 VARIANT_PREFIX = "{", "["
+# Delta concurrent-write conflicts: another transaction changed the same rows first.
+CONFLICTS = ("DELTA_CONCURRENT_APPEND", "DELTA_CONCURRENT_DELETE", "DELTA_CONCURRENT_TRANSACTION",
+             "ConcurrentAppendException", "ConcurrentDeleteReadException", "ConcurrentTransactionException")
 
 
 class SqlError(RuntimeError):
@@ -48,8 +51,18 @@ class Sql:
         return [dict(zip(names, row)) for row in rows]
 
     def update(self, statement: str, params: dict[str, Any] | None = None) -> int:
-        """UPDATE/MERGE; the number of rows it changed (used for compare-and-set state changes)."""
-        rows = self.run(statement, params)
+        """UPDATE/MERGE; the number of rows it changed (used for compare-and-set state changes).
+
+        Two writers may make the same state change at once (the server's follower thread and a status
+        read). Delta then fails the later one with a concurrent-write conflict instead of matching zero
+        rows; that means the other writer moved the row, so it counts as 0 and the caller reads again.
+        """
+        try:
+            rows = self.run(statement, params)
+        except SqlError as error:
+            if any(code in str(error) for code in CONFLICTS):
+                return 0
+            raise
         return int(rows[0].get("num_affected_rows") or 0) if rows else 0
 
     def one(self, statement: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:

@@ -1,0 +1,31 @@
+from aops.dbx.jobs import print_validation
+from aops.dbx.service import SKILL_NAME, check_skill_agent
+
+SPEC = b"---\nagent_id: a\nname: a\nbuild_type: skill\nservice_criticality: medium\ndata_sensitivity: internal\n---\n"
+
+
+def skill(name, description):
+    return f"---\nname: {name}\ndescription: {description}\n---\n".encode()
+
+
+def test_skill_name_follows_agent_skills_rule():
+    for good in ("a", "discount-policy", "a1-b2", "x" * 64):
+        assert SKILL_NAME.match(good), good
+    for bad in ("-a", "a-", "a--b", "A", "x" * 65, ""):
+        assert not SKILL_NAME.match(bad), bad
+
+
+def test_description_is_counted_in_characters():
+    long_korean = "가" * 1000  # 3,000 bytes but 1,000 characters
+    steps = check_skill_agent({"SPEC.md": SPEC, "agent/skills/k/SKILL.md": skill("k", long_korean)})
+    assert {s["name"]: s["status"] for s in steps} == {"format": "passed", "skills": "passed", "secrets": "passed"}
+    steps = check_skill_agent({"SPEC.md": SPEC, "agent/skills/k/SKILL.md": skill("k", "가" * 1025)})
+    assert next(s for s in steps if s["name"] == "skills")["status"] == "failed"
+
+
+def test_validation_report_shows_rules_and_files(capsys):
+    steps = check_skill_agent({"SPEC.md": SPEC, "agent/skills/k/SKILL.md": skill("k", "쓸 때")})
+    print_validation("r1", "cat.sch", {"agent_id": "a", "version": "1.0.0", "artifact_path": "/Volumes/c/s/a/1.0.0.zip",
+                                       "sha256": "abc", "files": ["SPEC.md"], "steps": steps, "status": "passed"})
+    out = capsys.readouterr().out
+    assert "규칙: SPEC.md에 agent_id" in out and "검사한 파일" in out and "cat.sch.validation_runs" in out

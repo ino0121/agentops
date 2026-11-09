@@ -31,7 +31,8 @@ DEFAULT_POLICY = {
 }
 CRITICALITY = {"low", "medium", "high"}
 SENSITIVITY = {"public", "internal", "confidential", "personal"}
-SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+# Agent Skills name rule: 1-64 lowercase letters, digits and hyphens; no hyphen at either end, no "--".
+SKILL_NAME = re.compile(r"^(?!.*--)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 SECRET_PATTERNS = {
     "Databricks 토큰": re.compile(r"dapi[0-9a-f]{32}"),
     "GitHub 토큰": re.compile(r"gh[pousr]_[A-Za-z0-9]{36}"),
@@ -39,6 +40,15 @@ SECRET_PATTERNS = {
     "개인 키": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 }
 FORBIDDEN_FILES = re.compile(r"(^|/)(\.env(\..*)?|.*\.pem|id_rsa)$")
+# What each validate step checks, shown in the Job description and in every validate run's output.
+CHECK_RULES = {
+    "format": "SPEC.md에 agent_id·name·build_type이 있고, service_criticality ∈ {low, medium, high}, "
+              "data_sensitivity ∈ {public, internal, confidential, personal}",
+    "skills": "agent/skills/<이름>/SKILL.md가 하나 이상. 이름은 소문자·숫자·하이픈 64자 이하(하이픈으로 시작·끝·연속 불가), "
+              "name = 폴더 이름, description 1~1024자 (Agent Skills 형식)",
+    "secrets": "모든 파일에서 " + "·".join(SECRET_PATTERNS) + " 패턴, 금지 파일(.env, *.pem, id_rsa)",
+    "record": "볼륨의 버전 zip이 등록 때 해시와 같다",
+}
 
 
 class ServiceError(Exception):
@@ -314,18 +324,23 @@ class Service:
         row["policy_version"] = int(row["policy_version"])
         return row
 
-    def run_validation(self, run_id: str) -> str:
-        """Inside the validate Job: check the registered zip against the policy and record the result."""
+    def run_validation(self, run_id: str) -> dict[str, Any]:
+        """Inside the validate Job: check the registered zip against the policy, record the result, return a report."""
         run = self.validation(run_id)
         self.sql.run(f"UPDATE {self.sql.table('validation_runs')} SET status = 'running' WHERE validation_run_id = :r", {"r": run_id})
         steps: list[dict[str, Any]] = []
+        report: dict[str, Any] = {"agent_id": run["agent_id"], "version": run["version"], "artifact_path": None,
+                                  "sha256": None, "files": []}
         try:
             version = self.version(run["agent_id"], run["version"])
+            report.update(artifact_path=version["artifact_path"], sha256=version["source_sha256"])
             data = self.w.files.download(version["artifact_path"]).contents.read()
             files = package.read(data)
+            report["files"] = sorted(files)
             steps = check_skill_agent(files)
-            if package.files_sha256(list(files.items())) != version["source_sha256"]:
-                steps.append({"name": "record", "status": "failed", "detail": "버전 zip이 등록 때 해시와 다릅니다"})
+            same = package.files_sha256(list(files.items())) == version["source_sha256"]
+            steps.append({"name": "record", "status": "passed" if same else "failed",
+                          "detail": "버전 zip이 등록 때 해시와 같습니다" if same else "버전 zip이 등록 때 해시와 다릅니다"})
             status = "passed" if all(s["status"] != "failed" for s in steps) else "failed"
             reason = None if status == "passed" else "; ".join(s["detail"] for s in steps if s["status"] == "failed")
         except Exception as error:
@@ -336,7 +351,7 @@ class Service:
             {"s": status, "steps": steps, "why": reason, "r": run_id},
         )
         self.event(run["agent_id"], run["version"], "validate", run["started_by"], {"status": status, "validation_run_id": run_id})
-        return status
+        return {**report, "status": status, "reason": reason, "steps": steps}
 
     # ── deploy ──────────────────────────────────────────────────────────────
 
@@ -460,7 +475,7 @@ class Service:
                 raise RuntimeError("버전 zip이 등록 때 해시와 다릅니다")
             production = self.production(agent_id)
             live = {s["skill_alias"]: s["skill_sha256"] for s in self.version_skills(agent_id, production["current_version"])} if production else {}
-            names = []
+            names, skills = [], []
             for alias, content in skill_folders(files).items():
                 row = next((s for s in self.version_skills(agent_id, version) if s["skill_alias"] == alias), None)
                 if not row or not row["uc_name"]:
@@ -468,9 +483,14 @@ class Service:
                 if not self._skill_exists(row["uc_name"]):
                     self._create_skill(row["uc_name"])
                     self._sync_skill(row["uc_name"], content)
+                    action = "created"
                 elif live.get(alias) != row["skill_sha256"] or not production:
-                    self._sync_skill(row["uc_name"], content)  # skipped when the content is already this version
+                    self._sync_skill(row["uc_name"], content)
+                    action = "updated"
+                else:
+                    action = "unchanged"  # the content is already this version
                 names.append(row["uc_name"])
+                skills.append({"uc_name": row["uc_name"], "action": action, "files": sorted(content)})
             previous = production["current_version"] if production else None
             self.sql.run(f"UPDATE {self.sql.table('agent_versions')} SET status = 'retired' WHERE agent_id = :a AND status = 'production'",
                          {"a": agent_id})
@@ -489,7 +509,9 @@ class Service:
                          "WHERE deployment_id = :d", {"t": ", ".join(names), "d": deployment_id})
             kind = "rollback" if gate["upgrade_type"] == "rollback" else "deploy"
             self.event(agent_id, version, kind, gate["requester"], {"gate_id": gate_id, "previous": previous, "skills": names})
-            return "succeeded"
+            return {"status": "succeeded", "agent_id": agent_id, "version": version, "previous": previous,
+                    "approval_mode": gate.get("approval_mode"), "requester": gate["requester"], "skills": skills,
+                    "artifact_path": target["artifact_path"]}
         except Exception as error:
             self.sql.run(f"UPDATE {self.sql.table('deployments')} SET status = 'failed', detail = parse_json(:d), ended_at = current_timestamp() "
                          "WHERE deployment_id = :id", {"d": {"error": f"{type(error).__name__}: {error}"}, "id": deployment_id})
@@ -509,8 +531,11 @@ class Service:
 
     def _set_gate(self, gate_id: str, **values: Any) -> None:
         sets = ", ".join(f"{k} = :{k}" for k in values)
-        self.sql.run(f"UPDATE {self.sql.table('release_gates')} SET {sets}, updated_at = current_timestamp() WHERE gate_id = :g",
-                     {**values, "g": gate_id})
+        statement = f"UPDATE {self.sql.table('release_gates')} SET {sets}, updated_at = current_timestamp() WHERE gate_id = :g"
+        for attempt in range(3):  # a plain write: on a concurrent-write conflict, write again
+            if self.sql.update(statement, {**values, "g": gate_id}) or attempt == 2:
+                return
+            time.sleep(1)
 
     # ── promote, load ───────────────────────────────────────────────────────
 
@@ -601,31 +626,52 @@ class Service:
         run = self.w.jobs.run_now(job_id, job_parameters={"id": target_id})
         return run.run_id
 
-    def _job(self, kind: str) -> int:
-        """The validate or deploy Job, created by this identity so it runs as itself."""
-        if kind in self._jobs:
-            return self._jobs[kind]
+    def _job_settings(self, kind: str) -> dict[str, Any]:
         from databricks.sdk.service import compute, jobs
 
-        name = f"aops-{kind}"
-        for job in self.w.jobs.list(name=name):
-            self._jobs[kind] = job.job_id
-            return job.job_id
+        registry, wheel = self.config.registry, self.config.dist_wheel
+        code = f"실행 코드: {wheel} 의 aops-job → aops.dbx.service.Service.run_{'validation' if kind == 'validate' else 'deploy'}"
+        if kind == "validate":
+            description = ("aops 배포 전 검사(Gate). aops 서버가 배포 요청마다 실행합니다.\n"
+                           + "\n".join(f"- {name}: {rule}" for name, rule in CHECK_RULES.items())
+                           + f"\n{code} (check_skill_agent)\n결과: {registry}.validation_runs.steps, 실행 출력에 검사별 결과")
+        else:
+            description = ("aops 운영 반영. 승인된 배포 요청마다 aops 서버가 실행합니다.\n"
+                           "승인 상태와 zip 해시를 다시 확인한 뒤, 스킬마다 UC Skill 내용을 이 버전으로 바꿉니다 "
+                           "(바뀐 파일 올리기, SKILL.md는 마지막, 남은 파일 지우기).\n"
+                           f"{code}\n결과: {registry}.agent_production · deployments · agent_events, 실행 출력에 스킬별 결과")
+        params = ["--kind", kind, "--id", "{{job.parameters.id}}", "--registry", registry, "--warehouse", self.config.warehouse_id]
+        return {
+            "name": f"aops-{kind}",
+            "description": description,
+            "max_concurrent_runs": 10 if kind == "validate" else 1,
+            "performance_target": jobs.PerformanceTarget.PERFORMANCE_OPTIMIZED,
+            "parameters": [jobs.JobParameterDefinition(name="id", default="")],
+            "environments": [jobs.JobEnvironment(environment_key="aops", spec=compute.Environment(
+                environment_version="2", dependencies=[wheel, "databricks-sdk>=0.158"]))],
+            "tasks": [jobs.Task(task_key=kind, environment_key="aops", max_retries=0, disable_auto_optimization=True,
+                                description=description.split("\n")[0],
+                                python_wheel_task=jobs.PythonWheelTask(package_name="aops_cli", entry_point="aops-job",
+                                                                       parameters=params))],
+        }
+
+    def _job(self, kind: str) -> int:
+        """The validate or deploy Job, created by this identity so it runs as itself, kept on this server's package."""
+        if kind in self._jobs:
+            return self._jobs[kind]
+        from databricks.sdk.service import jobs
+
         if not self.config.dist_wheel:
             raise ServiceError(500, "no_wheel", "Job에 쓸 aops 패키지 경로(AOPS_DIST_WHEEL)가 없습니다. aops admin setup을 다시 실행하세요")
-        params = ["--kind", kind, "--id", "{{job.parameters.id}}", "--registry", self.config.registry,
-                  "--warehouse", self.config.warehouse_id]
-        created = self.w.jobs.create(
-            name=name,
-            description=f"aops {kind} (aops 서버가 만든 Job, 서비스 주체로 실행)",
-            max_concurrent_runs=10 if kind == "validate" else 1,
-            performance_target=jobs.PerformanceTarget.PERFORMANCE_OPTIMIZED,
-            parameters=[jobs.JobParameterDefinition(name="id", default="")],
-            environments=[jobs.JobEnvironment(environment_key="aops", spec=compute.Environment(
-                environment_version="2", dependencies=[self.config.dist_wheel, "databricks-sdk>=0.158"]))],
-            tasks=[jobs.Task(task_key=kind, environment_key="aops", max_retries=0, disable_auto_optimization=True,
-                             python_wheel_task=jobs.PythonWheelTask(package_name="aops_cli", entry_point="aops-job", parameters=params))],
-        )
+        settings = self._job_settings(kind)
+        for found in self.w.jobs.list(name=settings["name"]):
+            current = self.w.jobs.get(found.job_id).settings
+            deps = [d for env in (current.environments or []) for d in ((env.spec.dependencies if env.spec else None) or [])]
+            if self.config.dist_wheel not in deps or current.description != settings["description"]:
+                self.w.jobs.reset(found.job_id, new_settings=jobs.JobSettings(**settings))  # new package or new description
+            self._jobs[kind] = found.job_id
+            return found.job_id
+        created = self.w.jobs.create(**settings)
         self._jobs[kind] = created.job_id
         return created.job_id
 
@@ -691,11 +737,11 @@ def check_skill_agent(files: dict[str, bytes]) -> list[dict[str, Any]]:
     for alias, content in skills.items():
         front = package.front_matter(content["SKILL.md"].decode("utf-8", "replace"))
         if not SKILL_NAME.match(alias):
-            problems.append(f"{alias}: 스킬 이름은 소문자·숫자·하이픈 64자 이하")
+            problems.append(f"{alias}: 스킬 이름은 소문자·숫자·하이픈 64자 이하 (하이픈으로 시작·끝·연속 불가)")
         if front.get("name") != alias:
             problems.append(f"{alias}: SKILL.md의 name이 폴더 이름과 다릅니다")
-        if not 1 <= len(front.get("description", "").encode()) <= 1024:
-            problems.append(f"{alias}: description은 1~1024바이트")
+        if not 1 <= len(str(front.get("description") or "")) <= 1024:
+            problems.append(f"{alias}: description은 1~1024자")
     steps.append({"name": "skills", "status": "failed" if problems else "passed",
                   "detail": "; ".join(problems) if problems else f"스킬 {len(skills)}개 형식이 맞습니다 ({', '.join(sorted(skills))})"})
 
