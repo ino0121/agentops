@@ -18,8 +18,11 @@ from . import Turn
 class ClaudeHarness:
     name = "claude"
 
-    def __init__(self, model: str | None = None, cli_path: str | None = None):
+    def __init__(self, model: str | None = None, cli_path: str | None = None, user_settings: bool = False):
         self.model = model
+        # Project settings only by default, so the same agent behaves the same on every PC. Company managed
+        # settings (model gateway, login helper) always apply; user settings are opt-in.
+        self.setting_sources = ["user", "project"] if user_settings else ["project"]
         self.cli_path = cli_path or shutil.which("claude")
 
     def version(self) -> str:
@@ -36,7 +39,7 @@ class ClaudeHarness:
         from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, ToolUseBlock, query
 
         options = ClaudeAgentOptions(cwd=str(cwd), resume=resume, model=self.model, cli_path=self.cli_path,
-                                     skills=project_skills(cwd) or None)
+                                     skills=project_skills(cwd) or None, setting_sources=self.setting_sources)
         turn, texts = Turn(text="", native_session=resume), []
         async for message in query(prompt=prompt, options=options):
             turn.events.append({"type": type(message).__name__, **_plain(message)})

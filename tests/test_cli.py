@@ -22,3 +22,14 @@ def test_init_creates_a_skill_agent(tmp_path, monkeypatch, capsys):
     assert main(["init", "price-helper"]) == 0
     assert (tmp_path / "price-helper" / ".claude/skills/my-skill/SKILL.md").is_file()
     assert main(["init", "Bad Name"]) == 2
+
+
+def test_deploy_stops_when_a_person_has_to_decide():
+    from aops.lifecycle import person_decides
+
+    pending = {"decision": "pending_approval", "approval_mode": "auto", "decision_reason": None}
+    assert not person_decides(pending)  # the policy is about to approve
+    assert person_decides({**pending, "decision_reason": "검사 실패 (검사 방식 optional, 승인자 판단): …"})
+    assert person_decides({**pending, "approval_mode": "required"})
+    assert person_decides({**pending, "approval_mode": "optional"})
+    assert not person_decides({**pending, "decision": "approved", "approval_mode": "required"})

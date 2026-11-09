@@ -17,7 +17,10 @@ def run_turn(project: Project, prompt: str, *, harness_name: str | None = None, 
     current = store.current_session()
     name = harness_name or (current["harness"] if current else project.harness)
     # Resolve the harness before touching the session, so an unknown name changes nothing.
-    adapter = get_harness(name, model=project.model)
+    options: dict[str, Any] = {"model": project.model}
+    if name == "claude":
+        options["user_settings"] = project.user_settings  # Codex keeps its user config: login and model provider live there
+    adapter = get_harness(name, **options)
     version = adapter.version()
     session = current or store.create_session(name)
     if name != session["harness"]:

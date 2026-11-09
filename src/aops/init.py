@@ -21,6 +21,7 @@ edition = "{edition}"              # local | dbx | omni | custom
 harness = "{harness}"              # 새 세션의 기본 하네스 (claude | codex). 세션 중 바꾸기: aops session switch
 instructions = "agent/instructions.md"
 skills = ["agent/skills/*"]
+user_settings = false              # true면 aops run(Claude)이 개인 설정(~/.claude의 MCP·hook·CLAUDE.md)도 읽음
 
 [session]
 handoff_tokens = {{ codex = 2000, claude = 4000 }}

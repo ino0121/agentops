@@ -37,3 +37,17 @@ def test_codex_read_without_final_phase_uses_last_message():
 def test_claude_skill_tool_is_recorded_by_skill_name():
     assert claude.tool_name("Skill", {"skill": "maple-sql-style"}) == "skill:maple-sql-style"
     assert claude.tool_name("Read", {"file_path": "x"}) == "Read"
+
+
+def test_claude_reads_project_settings_unless_the_project_asks_for_user_settings(tmp_path):
+    from aops import init
+    from aops.harness.claude import ClaudeHarness
+    from aops.project import Project
+
+    project = init.create(tmp_path, "agent-y")
+    assert project.user_settings is False
+    assert ClaudeHarness(cli_path="claude").setting_sources == ["project"]
+    toml = project.root / "aops.toml"
+    toml.write_text(toml.read_text(encoding="utf-8").replace("user_settings = false", "user_settings = true"), encoding="utf-8")
+    assert Project.load(project.root).user_settings is True
+    assert ClaudeHarness(cli_path="claude", user_settings=True).setting_sources == ["user", "project"]
