@@ -26,6 +26,9 @@ skills = ["agent/skills/*"]
 handoff_tokens = {{ codex = 2000, claude = 4000 }}
 """
 
+SPEC_DESCRIPTION = "이 에이전트가 하는 일을 한 줄로 적습니다 (에이전트 목록에 보입니다)"
+SKILL_DESCRIPTION = "이 스킬을 언제 쓰는지 한 줄로 적습니다. 하네스는 이 설명을 보고 스킬을 고릅니다."
+
 DBX_TOML = """
 [dbx]
 profile = ""                   # Databricks CLI 프로필. 환경변수 AOPS_PROFILE이 있으면 그것을 씀
@@ -44,7 +47,7 @@ owner_group:
 service_criticality: medium    # low | medium | high
 data_sensitivity: internal     # public | internal | confidential | personal
 security_level: general
-description: 이 에이전트가 하는 일을 한 줄로 적습니다 (에이전트 목록에 보입니다)
+description: {spec_description}
 ---
 
 # {name}
@@ -64,7 +67,7 @@ TEMPLATE_SKILL = "my-skill"
 SKILL_MD = """\
 ---
 name: my-skill
-description: 이 스킬을 언제 쓰는지 한 줄로 적습니다. 하네스는 이 설명을 보고 스킬을 고릅니다.
+description: {skill_description}
 ---
 
 # my-skill (스킬 템플릿)
@@ -150,9 +153,9 @@ def create(parent: Path, name: str, *, harness: str = "claude", edition: str = "
     files = {
         "README.md": README_MD.format(name=name, dbx_usage=DBX_USAGE if edition != "local" else ""),
         CONFIG_FILE: AOPS_TOML.format(name=name, harness=harness, edition=edition) + (DBX_TOML if edition != "local" else ""),
-        "SPEC.md": SPEC_MD.format(name=name),
+        "SPEC.md": SPEC_MD.format(name=name, spec_description=SPEC_DESCRIPTION),
         "agent/instructions.md": INSTRUCTIONS_MD.format(name=name),
-        f"agent/skills/{TEMPLATE_SKILL}/SKILL.md": SKILL_MD,
+        f"agent/skills/{TEMPLATE_SKILL}/SKILL.md": SKILL_MD.format(skill_description=SKILL_DESCRIPTION),
         "evals/questions.yaml": QUESTIONS_YAML,
         ".gitignore": GITIGNORE,
     }

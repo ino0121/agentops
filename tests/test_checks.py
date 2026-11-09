@@ -29,3 +29,26 @@ def test_validation_report_shows_rules_and_files(capsys):
                                        "sha256": "abc", "files": ["SPEC.md"], "steps": steps, "status": "passed"})
     out = capsys.readouterr().out
     assert "규칙: SPEC.md에 agent_id" in out and "검사한 파일" in out and "cat.sch.validation_runs" in out
+
+
+def test_untouched_init_template_is_rejected(tmp_path):
+    from aops import init, package
+
+    project = init.create(tmp_path, "fresh", edition="dbx")
+    files = package.read(package.build(project).data)
+    steps = {s["name"]: s for s in check_skill_agent(files)}
+    assert steps["format"]["status"] == "failed" and "템플릿" in steps["format"]["detail"]
+    assert steps["skills"]["status"] == "failed" and "my-skill" in steps["skills"]["detail"]
+
+
+def test_renamed_skill_with_template_description_is_rejected():
+    from aops.init import SKILL_DESCRIPTION
+
+    steps = check_skill_agent({"SPEC.md": SPEC, "agent/skills/k/SKILL.md": skill("k", SKILL_DESCRIPTION)})
+    assert next(s for s in steps if s["name"] == "skills")["status"] == "failed"
+
+
+def test_format_detail_names_only_the_problems():
+    spec = b"---\nagent_id: a\nname: a\nbuild_type: skill\nservice_criticality: huge\ndata_sensitivity: internal\n---\n"
+    step = check_skill_agent({"SPEC.md": spec, "agent/skills/k/SKILL.md": skill("k", "쓸 때")})[0]
+    assert step["status"] == "failed" and step["detail"] == "SPEC.md: 허용되지 않는 값 service_criticality='huge'"

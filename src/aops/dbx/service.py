@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .. import package
+from ..init import SKILL_DESCRIPTION, SPEC_DESCRIPTION, TEMPLATE_SKILL
 from ..hashing import skills_sha256
 from .sql import Sql, loads
 
@@ -43,9 +44,9 @@ FORBIDDEN_FILES = re.compile(r"(^|/)(\.env(\..*)?|.*\.pem|id_rsa)$")
 # What each validate step checks, shown in the Job description and in every validate run's output.
 CHECK_RULES = {
     "format": "SPEC.md에 agent_id·name·build_type이 있고, service_criticality ∈ {low, medium, high}, "
-              "data_sensitivity ∈ {public, internal, confidential, personal}",
+              "data_sensitivity ∈ {public, internal, confidential, personal}, description이 init 템플릿 문구가 아니다",
     "skills": "agent/skills/<이름>/SKILL.md가 하나 이상. 이름은 소문자·숫자·하이픈 64자 이하(하이픈으로 시작·끝·연속 불가), "
-              "name = 폴더 이름, description 1~1024자 (Agent Skills 형식)",
+              "name = 폴더 이름, description 1~1024자 (Agent Skills 형식). init 템플릿(my-skill, 템플릿 description) 그대로면 반려",
     "secrets": "모든 파일에서 " + "·".join(SECRET_PATTERNS) + " 패턴, 금지 파일(.env, *.pem, id_rsa)",
     "record": "볼륨의 버전 zip이 등록 때 해시와 같다",
 }
@@ -428,7 +429,7 @@ class Service:
         if gate["approval_mode"] == "auto":
             self.sql.run(f"INSERT INTO {self.sql.table('approvals')} VALUES (:id, :g, 'policy:auto', 'approve', '정책의 자동 승인', "
                          "'policy', current_timestamp())", {"id": now_id(), "g": gate_id})
-            self._approved(gate)
+            self._approved(gate, "policy:auto")
 
     def approve(self, caller: Caller, gate_id: str, comment: str | None = None) -> dict[str, Any]:
         gate = self.gate(gate_id)
@@ -444,10 +445,10 @@ class Service:
         approved = self.sql.one(f"SELECT count(*) AS n FROM {self.sql.table('approvals')} WHERE gate_id = :g AND decision = 'approve'",
                                 {"g": gate_id})
         if int(approved["n"]) >= int(gate["required_approvals"]):
-            self._approved(gate)
+            self._approved(gate, caller.email)
         return self.gate(gate_id)
 
-    def _approved(self, gate: dict[str, Any]) -> None:
+    def _approved(self, gate: dict[str, Any], actor: str) -> None:
         deployment_id = now_id()
         if not self.sql.update(f"UPDATE {self.sql.table('release_gates')} SET decision = 'approved', deployment_id = :d, "
                                "updated_at = current_timestamp() WHERE gate_id = :g AND decision = 'pending_approval'",
@@ -455,7 +456,7 @@ class Service:
             return
         self.sql.run(f"INSERT INTO {self.sql.table('deployments')} VALUES (:d, :g, :a, :v, 'production', NULL, NULL, 'running', NULL, "
                      "NULL, current_timestamp(), NULL)", {"d": deployment_id, "g": gate["gate_id"], "a": gate["agent_id"], "v": gate["version"]})
-        self.event(gate["agent_id"], gate["version"], "gate_approved", "policy:auto" if gate["approval_mode"] == "auto" else gate["requester"],
+        self.event(gate["agent_id"], gate["version"], "gate_approved", actor,
                    {"gate_id": gate["gate_id"], "approval_mode": gate["approval_mode"]})
         job_run = self._run_job("deploy", gate["gate_id"])
         self.sql.run(f"UPDATE {self.sql.table('deployments')} SET job_run_id = :j WHERE deployment_id = :d",
@@ -540,7 +541,7 @@ class Service:
     # ── promote, load ───────────────────────────────────────────────────────
 
     def promote(self, caller: Caller, agent_id: str, principals: list[str], revoke: bool = False) -> list[dict[str, Any]]:
-        from databricks.sdk.service.catalog import PermissionsChange
+        from databricks.sdk.service.catalog import PermissionsChange, Privilege
 
         agent = self._agent_or_404(agent_id)
         if not self._is_owner(caller, agent):
@@ -553,7 +554,8 @@ class Service:
         for principal in principals:
             name = principal.split(":", 1)[1] if ":" in principal else principal
             for uc_name in names:
-                change = PermissionsChange(principal=name, remove=["READ_VOLUME"]) if revoke else PermissionsChange(principal=name, add=["READ_VOLUME"])
+                read = [Privilege.READ_VOLUME]  # the SDK wants the enum, not the name
+                change = PermissionsChange(principal=name, remove=read) if revoke else PermissionsChange(principal=name, add=read)
                 self.w.grants.update("skill", uc_name, changes=[change])
                 grants.append({"agent_id": agent_id, "securable": f"skill:{uc_name}", "principal": principal,
                                "permission": "READ_VOLUME", "granted": not revoke})
@@ -721,14 +723,17 @@ def pick(value: str | None, allowed: set[str], default: str) -> str:
 
 
 def check_skill_agent(files: dict[str, bytes]) -> list[dict[str, Any]]:
-    """The validate steps for a skill agent: format, skills, secrets."""
+    """The validate steps for a skill agent: format, skills, secrets. An untouched init template fails."""
     steps: list[dict[str, Any]] = []
     spec = package.front_matter(files.get("SPEC.md", b"").decode("utf-8", "replace"))
     missing = [k for k in ("agent_id", "name", "build_type") if not spec.get(k)]
     bad = [k for k, allowed in (("service_criticality", CRITICALITY), ("data_sensitivity", SENSITIVITY)) if spec.get(k) not in allowed]
-    detail = "SPEC.md 필수 항목과 값이 맞습니다" if not missing and not bad else \
-        f"SPEC.md: 빈 항목 {missing or '-'}, 허용되지 않는 값 {bad or '-'}"
-    steps.append({"name": "format", "status": "passed" if not missing and not bad else "failed", "detail": detail})
+    problems = [f"빈 항목 {', '.join(missing)}"] if missing else []
+    problems += [f"허용되지 않는 값 {', '.join(f'{k}={spec.get(k)!r}' for k in bad)}"] if bad else []
+    if str(spec.get("description") or "").strip() == SPEC_DESCRIPTION:
+        problems.append("description이 템플릿 그대로입니다 (이 에이전트가 하는 일을 적으세요)")
+    steps.append({"name": "format", "status": "failed" if problems else "passed",
+                  "detail": "SPEC.md: " + "; ".join(problems) if problems else "SPEC.md 필수 항목과 값이 맞습니다"})
 
     problems = []
     skills = skill_folders(files)
@@ -742,6 +747,10 @@ def check_skill_agent(files: dict[str, bytes]) -> list[dict[str, Any]]:
             problems.append(f"{alias}: SKILL.md의 name이 폴더 이름과 다릅니다")
         if not 1 <= len(str(front.get("description") or "")) <= 1024:
             problems.append(f"{alias}: description은 1~1024자")
+        if alias == TEMPLATE_SKILL:
+            problems.append(f"{alias}: init 템플릿입니다. 폴더 이름과 SKILL.md를 내 스킬로 바꾸세요")
+        elif str(front.get("description") or "").strip() == SKILL_DESCRIPTION:
+            problems.append(f"{alias}: description이 템플릿 그대로입니다 (언제 이 스킬을 쓰는지 적으세요)")
     steps.append({"name": "skills", "status": "failed" if problems else "passed",
                   "detail": "; ".join(problems) if problems else f"스킬 {len(skills)}개 형식이 맞습니다 ({', '.join(sorted(skills))})"})
 
