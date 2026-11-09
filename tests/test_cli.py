@@ -20,5 +20,5 @@ def test_unknown_harness_is_one_line_error(tmp_path, monkeypatch, capsys):
 def test_init_creates_a_skill_agent(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert main(["init", "price-helper"]) == 0
-    assert (tmp_path / "price-helper" / ".claude/skills/vat-calculator/SKILL.md").is_file()
+    assert (tmp_path / "price-helper" / ".claude/skills/my-skill/SKILL.md").is_file()
     assert main(["init", "Bad Name"]) == 2

@@ -23,8 +23,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     project = init.create(Path.cwd(), args.name, harness=args.harness, edition=args.edition)
     print(f"created {project.root}")
     for folder in project.skill_folders():
-        print(f"  skill {folder.name}")
-    print(f"next: cd {args.name} && aops run \"공급가액 12,000원의 부가세와 합계는?\"")
+        note = "  (템플릿: 폴더 이름과 SKILL.md를 내 스킬로 바꿔 쓰세요)" if folder.name == init.TEMPLATE_SKILL else ""
+        print(f"  skill {folder.name}{note}")
+    print(f"next: cd {args.name} → SPEC.md, agent/instructions.md, agent/skills/를 채운 뒤 aops run \"<질문>\"")
     return 0
 
 

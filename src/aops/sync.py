@@ -1,13 +1,13 @@
 """Harness project settings made from aops.toml.
 
-aops writes the instructions into a marked block of CLAUDE.md and AGENTS.md and copies each skill
-folder to where each harness looks for project skills. It never removes what it did not write:
-text outside the marked block stays, and only skills aops placed are updated or removed. A skill
-copy someone edited by hand is left alone and reported.
+aops writes CLAUDE.md and AGENTS.md from the instructions file (the whole file, nothing added) and copies
+each skill folder to where each harness looks for project skills. It only changes what it wrote: a file
+or skill copy it did not make, or one someone edited by hand, is left alone and reported.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from dataclasses import dataclass, field
@@ -16,8 +16,8 @@ from pathlib import Path
 from .hashing import folder_sha256
 from .project import Project
 
-START = "<!-- aops:start · made from aops.toml, aops rewrites this block -->"
-END = "<!-- aops:end -->"
+# Marks of the block form older aops versions wrote; such a file is aops's and is rewritten whole.
+OLD_START, OLD_END = "<!-- aops:start", "<!-- aops:end -->"
 INSTRUCTION_FILES = ("CLAUDE.md", "AGENTS.md")
 SKILL_DIRS = {"claude": ".claude/skills", "codex": ".agents/skills"}
 
@@ -38,9 +38,27 @@ def sync(project: Project) -> SyncResult:
 
     source = project.root / project.instructions
     text = source.read_text(encoding="utf-8").strip() if source.is_file() else ""
+    wanted_text = text + "\n" if text else ""
     for name in INSTRUCTION_FILES:
-        if _write_block(project.root / name, text):
-            result.written.append(name)
+        path = project.root / name
+        current = path.read_text(encoding="utf-8") if path.is_file() else None
+        if current == wanted_text or (current is None and not wanted_text):
+            if current is not None:
+                new_state[name] = _sha(current)
+            continue
+        ours = current is None or (name in state and _sha(current) == state[name]) or \
+            (name not in state and OLD_START in current and OLD_END in current)
+        if not ours:
+            result.kept.append(name)  # edited by hand, or a file aops did not make
+            if name in state:
+                new_state[name] = state[name]
+            continue
+        if wanted_text:
+            path.write_text(wanted_text, encoding="utf-8")
+            new_state[name] = _sha(wanted_text)
+        else:
+            path.unlink()
+        result.written.append(name)
 
     skills = {folder.name: folder for folder in project.skill_folders()}
     for target_dir in SKILL_DIRS.values():
@@ -75,18 +93,5 @@ def sync(project: Project) -> SyncResult:
     return result
 
 
-def _write_block(path: Path, text: str) -> bool:
-    block = f"{START}\n{text}\n{END}" if text else ""
-    old = path.read_text(encoding="utf-8") if path.is_file() else ""
-    if START in old and END in old:
-        head, rest = old.split(START, 1)
-        tail = rest.split(END, 1)[1]
-        new = (head + block + tail) if block else (head.rstrip() + tail).strip() + "\n"
-    elif block:
-        new = (old.rstrip() + "\n\n" + block + "\n") if old.strip() else block + "\n"
-    else:
-        return False
-    if new == old:
-        return False
-    path.write_text(new, encoding="utf-8")
-    return True
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
