@@ -30,6 +30,7 @@ my-agent/
 - 스킬은 [Agent Skills](https://agentskills.io) 형식입니다. 폴더 이름이 스킬 이름이고, `SKILL.md`의 `name`은 폴더 이름과 같아야 합니다. 하네스는 `description`을 보고 언제 이 스킬을 쓸지 고릅니다.
 - 템플릿(`my-skill`, SPEC·스킬의 템플릿 description)을 그대로 두면 `aops run`은 되지만 배포 요청의 검사(Gate)에서 반려됩니다.
 - 이 폴더에서 `claude`·`codex`를 직접 실행해도 같은 지시와 스킬을 씁니다. 다만 aops 세션 기록과 trace는 `aops run`일 때만 남습니다.
+- `aops run`(Claude)은 기본으로 이 폴더의 설정만 읽어서, 개발자 PC가 달라도 같은 에이전트가 같게 동작합니다. 개인 MCP 서버 등을 함께 쓰려면 `[agent] user_settings = true`로 켭니다. 회사 관리 설정(모델 경로 등)은 늘 적용됩니다.
 
 ### `SPEC.md`
 
@@ -60,6 +61,7 @@ edition = "dbx"                # local | dbx | omni | custom
 harness = "claude"             # 새 세션의 기본 하네스 (claude | codex). 세션 중 바꾸기: aops session switch
 instructions = "agent/instructions.md"
 skills = ["agent/skills/*"]    # 이 아래 스킬을 모두 씀
+user_settings = false          # true면 aops run(Claude)이 개인 설정(~/.claude의 MCP·hook·CLAUDE.md)도 읽음
 
 [session]
 handoff_tokens = { codex = 2000, claude = 4000 }   # 하네스를 바꿀 때 넘길 앞 대화의 크기

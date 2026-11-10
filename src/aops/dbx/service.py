@@ -208,20 +208,11 @@ class Service:
         path = f"/Volumes/{self.config.catalog}/{self.config.schema}/{agent_id}/{new_version}.zip"
         self.w.files.upload(path, io.BytesIO(data), overwrite=False)
 
-        # 2. skills: hashes for the record; the first registration creates each UC skill with no readers
+        # 2. skills: hashes and the UC skill each will be. The deploy Job creates the UC skill on the first
+        #    deploy, so names that never reach production (templates, renamed skills) never appear in UC.
         skills = skill_folders(files)
         hashes = {alias: package.files_sha256(list(content.items())) for alias, content in skills.items()}
-        published: dict[str, str | None] = {}
-        for alias, content in skills.items():
-            uc_name = f"{self.config.registry}.{uc_skill_id(agent_id, alias)}"
-            try:
-                if not self._skill_exists(uc_name):
-                    self._create_skill(uc_name)
-                    self._sync_skill(uc_name, content)
-                published[alias] = uc_name
-            except Exception as error:  # preview off or Compliance Security Profile: skip publishing only
-                published[alias] = None
-                print(f"aops: UC Skill 단계를 건너뜁니다 ({alias}): {error}")
+        published = {alias: f"{self.config.registry}.{uc_skill_id(agent_id, alias)}" for alias in skills}
 
         # 3. the registry
         if not agent:
@@ -414,32 +405,105 @@ class Service:
             return gate
         if run["status"] == "passed":
             self._after_gate(gate_id, run["validation_run_id"])
+        elif run["status"] == "failed" and gate["validation_policy_mode"] == "optional":
+            # optional: the failed checks stay on record and an approver decides
+            self._after_gate(gate_id, run["validation_run_id"],
+                             failed=f"검사 실패 (검사 방식 optional, 승인자 판단): {run.get('failure_reason') or ''}")
         elif self.sql.update(f"UPDATE {self.sql.table('release_gates')} SET decision = 'rejected', decision_reason = :why, "
                              "updated_at = current_timestamp() WHERE gate_id = :g AND decision = 'validating'",
                              {"g": gate_id, "why": f"검사 {run['status']}: {run.get('failure_reason') or ''}"}):
             self.event(gate["agent_id"], gate["version"], "gate_rejected", "policy:gate", {"gate_id": gate_id, "validation": run["status"]})
         return self.gate(gate_id)
 
-    def _after_gate(self, gate_id: str, run_id: str | None) -> None:
-        moved = self.sql.update(f"UPDATE {self.sql.table('release_gates')} SET decision = 'pending_approval', validation_run_id = :r, "
-                                "updated_at = current_timestamp() WHERE gate_id = :g AND decision = 'validating'", {"g": gate_id, "r": run_id})
-        if not moved:
-            return
+    def _after_gate(self, gate_id: str, run_id: str | None, failed: str | None = None) -> None:
         gate = self.gate(gate_id)
+        approve, why = (False, failed) if failed else self._auto_approval(gate)  # a failed check always waits for a person
+        moved = self.sql.update(f"UPDATE {self.sql.table('release_gates')} SET decision = 'pending_approval', validation_run_id = :r, "
+                                "decision_reason = :why, updated_at = current_timestamp() WHERE gate_id = :g AND decision = 'validating'",
+                                {"g": gate_id, "r": run_id, "why": None if approve else why})
+        if not moved or not approve:
+            return
+        self.sql.run(f"INSERT INTO {self.sql.table('approvals')} VALUES (:id, :g, 'policy:auto', 'approve', :c, "
+                     "'policy', current_timestamp())", {"id": now_id(), "g": gate_id, "c": why})
+        self._approved(gate, "policy:auto")
+
+    def _auto_approval(self, gate: dict[str, Any]) -> tuple[bool, str | None]:
+        """Whether the policy approves this request by itself, and why (or why a person has to)."""
         if gate["approval_mode"] == "auto":
-            self.sql.run(f"INSERT INTO {self.sql.table('approvals')} VALUES (:id, :g, 'policy:auto', 'approve', '정책의 자동 승인', "
-                         "'policy', current_timestamp())", {"id": now_id(), "g": gate_id})
-            self._approved(gate, "policy:auto")
+            return True, "정책의 자동 승인"
+        if gate["approval_mode"] != "optional":
+            return False, None
+        spec = loads((self.version(gate["agent_id"], gate["version"]) or {}).get("spec")) or {}
+        crit = pick(spec.get("service_criticality"), CRITICALITY, "medium")
+        sens = pick(spec.get("data_sensitivity"), SENSITIVITY, "internal")
+        values = f"중요도 {crit}, 민감도 {sens}"
+        if crit == "low" and sens in ("public", "internal"):
+            return True, f"정책의 자동 승인 (approval optional: {values})"
+        return False, f"승인자 필요 (approval optional: {values}. 자동 승인은 중요도 low이고 민감도 public·internal일 때)"
+
+    def gates(self, caller: Caller, decision: str | None = None, mine: bool = False, to_approve: bool = False,
+              agent_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        """Deploy requests, newest first. `to_approve`: waiting for this caller (not their own, in the approver group)."""
+        clauses, params = [], {}
+        if decision:
+            clauses.append("g.decision = :d")
+            params["d"] = decision
+        if agent_id:
+            clauses.append("g.agent_id = :a")
+            params["a"] = agent_id
+        if mine:
+            clauses.append("g.requester = :me")
+            params["me"] = caller.email
+        if to_approve:
+            _, policy = self.policy()
+            if policy["approver_group"] and policy["approver_group"] not in caller.groups:
+                return []
+            clauses.append("g.decision = 'pending_approval' AND g.requester <> :me")
+            params["me"] = caller.email
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        return self.sql.run(
+            f"SELECT g.*, d.status AS deployment_status, (SELECT count(*) FROM {self.sql.table('approvals')} a "
+            f"WHERE a.gate_id = g.gate_id AND a.decision = 'approve') AS approvals FROM {self.sql.table('release_gates')} g "
+            f"LEFT JOIN {self.sql.table('deployments')} d ON d.deployment_id = g.deployment_id {where} "
+            f"ORDER BY g.requested_at DESC LIMIT {int(limit)}", params)
+
+    def _check_approver(self, caller: Caller, gate: dict[str, Any], action: str) -> None:
+        if gate["decision"] != "pending_approval":
+            raise ServiceError(409, "not_pending", f"승인 대기 중인 요청이 아닙니다 ({gate['decision']})", f"aops {action}")
+        if caller.email == gate["requester"]:
+            hint = "요청자 본인은 승인할 수 없습니다" if action == "approve" else "요청자 본인은 반려 대신 aops deploy --cancel로 취소합니다"
+            raise ServiceError(403, "self_approval", hint, f"aops {action}")
+        _, policy = self.policy()
+        if policy["approver_group"] and policy["approver_group"] not in caller.groups:
+            raise ServiceError(403, "not_approver", f"승인 그룹({policy['approver_group']})만 할 수 있습니다", f"aops {action}")
+
+    def reject(self, caller: Caller, gate_id: str, reason: str) -> dict[str, Any]:
+        gate = self.gate(gate_id)
+        self._check_approver(caller, gate, "reject")
+        self.sql.run(f"INSERT INTO {self.sql.table('approvals')} VALUES (:id, :g, :by, 'reject', :c, 'console', current_timestamp())",
+                     {"id": now_id(), "g": gate_id, "by": caller.email, "c": reason})
+        if self.sql.update(f"UPDATE {self.sql.table('release_gates')} SET decision = 'rejected', decision_reason = :why, "
+                           "updated_at = current_timestamp() WHERE gate_id = :g AND decision = 'pending_approval'",
+                           {"g": gate_id, "why": f"반려 ({caller.email}): {reason}"}):
+            self.event(gate["agent_id"], gate["version"], "gate_rejected", caller.email, {"gate_id": gate_id, "reason": reason})
+        return self.gate(gate_id)
+
+    def cancel(self, caller: Caller, gate_id: str) -> dict[str, Any]:
+        gate = self.gate(gate_id)
+        if caller.email != gate["requester"] and not self._is_owner(caller, self._agent_or_404(gate["agent_id"])):
+            raise ServiceError(403, "not_owner", "요청자나 담당자·담당 팀만 취소할 수 있습니다", "aops deploy --cancel")
+        if gate["decision"] not in ("validating", "pending_approval"):
+            raise ServiceError(409, "not_open", f"취소할 수 없는 상태입니다 ({gate['decision']}). 운영 반영 뒤에는 이전 버전을 deploy해 되돌립니다",
+                               "aops deploy --cancel")
+        if self.sql.update(f"UPDATE {self.sql.table('release_gates')} SET decision = 'canceled', decision_reason = :why, "
+                           "updated_at = current_timestamp() WHERE gate_id = :g AND decision IN ('validating', 'pending_approval')",
+                           {"g": gate_id, "why": f"취소 ({caller.email})"}):
+            self.event(gate["agent_id"], gate["version"], "gate_canceled", caller.email, {"gate_id": gate_id, "was": gate["decision"]})
+        return self.gate(gate_id)
 
     def approve(self, caller: Caller, gate_id: str, comment: str | None = None) -> dict[str, Any]:
         gate = self.gate(gate_id)
-        if gate["decision"] != "pending_approval":
-            raise ServiceError(409, "not_pending", "승인 대기 중인 요청이 아닙니다")
-        if caller.email == gate["requester"]:
-            raise ServiceError(403, "self_approval", "요청자 본인은 승인할 수 없습니다")
-        _, policy = self.policy()
-        if policy["approver_group"] and policy["approver_group"] not in caller.groups:
-            raise ServiceError(403, "not_approver", f"승인 그룹({policy['approver_group']})만 승인할 수 있습니다")
+        self._check_approver(caller, gate, "approve")
         self.sql.run(f"INSERT INTO {self.sql.table('approvals')} VALUES (:id, :g, :by, 'approve', :c, 'console', current_timestamp())",
                      {"id": now_id(), "g": gate_id, "by": caller.email, "c": comment})
         approved = self.sql.one(f"SELECT count(*) AS n FROM {self.sql.table('approvals')} WHERE gate_id = :g AND decision = 'approve'",
@@ -492,6 +556,10 @@ class Service:
                     action = "unchanged"  # the content is already this version
                 names.append(row["uc_name"])
                 skills.append({"uc_name": row["uc_name"], "action": action, "files": sorted(content)})
+            # skills of the old production version that this version no longer has: kept, only reported
+            kept = set(skill_folders(files))
+            removed = [s["uc_name"] for s in (self.version_skills(agent_id, production["current_version"]) if production else [])
+                       if s["skill_alias"] not in kept and s["uc_name"]]
             previous = production["current_version"] if production else None
             self.sql.run(f"UPDATE {self.sql.table('agent_versions')} SET status = 'retired' WHERE agent_id = :a AND status = 'production'",
                          {"a": agent_id})
@@ -509,10 +577,11 @@ class Service:
             self.sql.run(f"UPDATE {self.sql.table('deployments')} SET status = 'succeeded', target = :t, ended_at = current_timestamp() "
                          "WHERE deployment_id = :d", {"t": ", ".join(names), "d": deployment_id})
             kind = "rollback" if gate["upgrade_type"] == "rollback" else "deploy"
-            self.event(agent_id, version, kind, gate["requester"], {"gate_id": gate_id, "previous": previous, "skills": names})
+            self.event(agent_id, version, kind, gate["requester"],
+                       {"gate_id": gate_id, "previous": previous, "skills": names, "not_in_version": removed})
             return {"status": "succeeded", "agent_id": agent_id, "version": version, "previous": previous,
                     "approval_mode": gate.get("approval_mode"), "requester": gate["requester"], "skills": skills,
-                    "artifact_path": target["artifact_path"]}
+                    "not_in_version": removed, "artifact_path": target["artifact_path"]}
         except Exception as error:
             self.sql.run(f"UPDATE {self.sql.table('deployments')} SET status = 'failed', detail = parse_json(:d), ended_at = current_timestamp() "
                          "WHERE deployment_id = :id", {"d": {"error": f"{type(error).__name__}: {error}"}, "id": deployment_id})
@@ -525,9 +594,10 @@ class Service:
         deployment = self.sql.one(f"SELECT status FROM {self.sql.table('deployments')} WHERE deployment_id = :d",
                                   {"d": row["deployment_id"]}) if row.get("deployment_id") else None
         row["deployment_status"] = deployment["status"] if deployment else None
-        approvals = self.sql.one(f"SELECT count(*) AS n FROM {self.sql.table('approvals')} WHERE gate_id = :g AND decision = 'approve'",
-                                 {"g": gate_id})
+        approvals = self.sql.one(f"SELECT count(*) AS n, max_by(approver, decided_at) AS last FROM {self.sql.table('approvals')} "
+                                 "WHERE gate_id = :g AND decision = 'approve'", {"g": gate_id})
         row["approvals"] = int(approvals["n"]) if approvals else 0
+        row["approved_by"] = approvals.get("last") if approvals else None
         return row
 
     def _set_gate(self, gate_id: str, **values: Any) -> None:

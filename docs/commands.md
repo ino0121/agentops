@@ -4,7 +4,7 @@
 
 > **지금** 열: ● 동작 (스킬 기반) · ◐ 일부 동작 · – 설계. 명령마다 **지금:** 줄에 현재 구현을 적었습니다. 노코드·코드 기반 경로는 아직 없습니다(코드 `register`는 501, `init`은 안내만).
 
-명령은 19개입니다. 개발자가 매일 쓰는 것은 개발 명령 7개입니다. 찾기·가져오기와 등록·배포는 dbx 이상에서만 쓰고, `admin`은 관리자만 씁니다. custom 에디션은 모든 명령이 dbx와 같고, 같은 기능을 `aops serve` API로도 씁니다.
+명령은 22개입니다(console 화면 전까지 쓰는 승인 명령 `gates`·`approve`·`reject` 포함). 개발자가 매일 쓰는 것은 개발 명령 7개입니다. 찾기·가져오기와 등록·배포는 dbx 이상에서만 쓰고, `admin`은 관리자만 씁니다. custom 에디션은 모든 명령이 dbx와 같고, 같은 기능을 `aops serve` API로도 씁니다.
 
 **개발 (모든 에디션, 강제 없음)**
 
@@ -32,7 +32,8 @@
 | [`aops configure`](#aops-configure) | Databricks·Omnigent 연결, 에디션 이전 | – | ● | ● | – |
 | [`aops register`](#aops-register) | 버전 저장 | – | ● | ● | ● |
 | [`aops validate`](#aops-validate) | 관리자 정책 검사 (배포 전 자가 점검) | 참고용 | ● | ● | ● |
-| [`aops deploy`](#aops-deploy) | 운영 반영 (검사·승인 뒤) | – | ● | ● | ◐ |
+| [`aops deploy`](#aops-deploy) | 운영 반영 (검사·승인 뒤), 요청 취소 | – | ● | ● | ◐ |
+| [`aops gates` · `approve` · `reject`](#aops-gates--approve--reject) | 배포 요청 보기·승인·반려 (console 화면과 같은 API) | – | ● | ● | ● |
 | [`aops promote`](#aops-promote) | 대상자 권한 부여 | – | ● | ● | ● |
 
 **운영·관리**
@@ -88,7 +89,7 @@ aops run <questions.yaml> [--variants a,b] [--repeat N] [--concurrency N] [--jso
 - 구독 로그인은 한도가 개인 사용 기준이라, 구독 로그인 배치는 기본 동시 실행 수를 낮게 둡니다. 큰 배치는 API 키나 Unity Gateway를 권합니다.
 - dbx: 칸 하나가 MLflow trace 하나입니다(`batch_id`·`variant`·`question_id` 태그).
 - omni: Omnigent 세션으로 실행합니다.
-- **지금:** 질문 하나만 실행합니다(`--harness`, `--json`). 내 PC에 설치된 `claude`(Claude Agent SDK)·`codex`(`codex app-server`)를 띄우고, 모델 호출은 각 하네스 설정을 따릅니다. dbx 에디션이고 `[dbx] trace = true`면 턴마다 내 MLflow 실험에 trace 하나를 남깁니다: `agent.turn` 아래 `llm.<모델>`(토큰, MLflow가 계산한 비용), `aops.handoff`, `tool.*`·`tool.skill.<이름>`. 배치는 설계입니다.
+- **지금:** 질문 하나만 실행합니다(`--harness`, `--json`). 내 PC에 설치된 `claude`(Claude Agent SDK)·`codex`(`codex app-server`)를 띄우고, 모델 호출은 각 하네스 설정을 따릅니다. dbx 에디션이고 `[dbx] trace = true`면 턴마다 내 MLflow 실험에 trace 하나를 남깁니다: `agent.turn` 아래 `llm.<모델>`(토큰, MLflow가 계산한 비용), `aops.handoff`, `tool.*`·`tool.skill.<이름>`. Claude는 기본으로 **프로젝트 설정만** 읽습니다(개인 `~/.claude`의 MCP 서버·hook·`CLAUDE.md` 제외, 회사 관리 설정은 적용). `aops.toml [agent] user_settings = true`면 개인 설정도 읽습니다. Codex는 로그인과 모델 경로가 사용자 설정에 있어 사용자 설정을 그대로 씁니다. 배치는 설계입니다.
 
 ### `aops evaluate`
 
@@ -187,7 +188,7 @@ aops load <agent_id> [--version x.y.z] [--dir <폴더>]
 1. `aops register`: 버전 저장 → `agents`·`agent_versions`·`agent_version_skills` (노코드는 5에서 자동)
 2. `aops validate`: 등록된 버전을 Lakeflow Job이 관리자 정책으로 검사 → `validation_runs` (배포 요청 때 결과가 없으면 자동으로 돌림)
 3. `aops deploy`: 배포 요청 → 검사 결과 확인 → `release_gates`
-4. console 화면: 승인 그룹이 [승인]·[반려] → `approvals` (정책에 따라 자동 승인). **지금:** console 화면 대신 정책 자동 승인 또는 aops 서버 API
+4. console 화면: 승인 그룹이 [승인]·[반려] → `approvals` (정책에 따라 자동 승인). **지금:** console 화면 대신 `aops approve`·`aops reject`(같은 API)
 5. 배포 Job: 승인 기록 재확인 → 운영 반영 → `deployments`, `agent_production`
 6. `aops promote --to <대상>`: 대상자 권한 부여
 
@@ -214,12 +215,12 @@ aops register [--version x.y.z] [--bump fix|minor|major]
 
 - 버전을 저장합니다. 처음은 1.0.0이고, 그 뒤에는 `--bump`나 등록 규칙으로 올립니다. 검증 통과를 요구하지 않습니다. 강제는 배포 요청에서 합니다.
 - 에이전트마다 UC Volume을 하나 두고, 버전마다 `<version>.zip`을 한 번만 씁니다. 등록된 버전은 바꿀 수 없습니다.
-- 스킬: 처음 등록할 때 Unity Gateway Skills에 스킬을 만듭니다. 이때는 아무에게도 읽기 권한을 주지 않습니다. UC Skill의 내용은 늘 운영 버전이고, 새 버전의 내용은 `deploy` 때 바꿉니다.
+- 스킬: 등록은 볼륨 zip과 스킬 해시만 남깁니다. UC Skill(Unity Gateway Skills)은 **처음 배포할 때** 배포 Job이 만들고, 이때는 아무에게도 읽기 권한을 주지 않습니다. UC Skill의 내용은 늘 운영 버전이고, 새 버전의 내용은 `deploy` 때 바꿉니다. 배포되지 않은 이름(템플릿, 이름을 바꾼 스킬)은 UC에 생기지 않습니다.
 - 코드: UC registered model 버전과 MLflow LoggedModel도 만듭니다. 평가와 trace가 같은 model ID로 이어집니다.
 - 노코드: 따로 실행하지 않습니다. 배포에 성공하면 배포 Job이 그 정의로 버전을 등록합니다.
 - Delta `agents`·`agent_versions`에 버전 해시, 하네스·SDK 버전, UC 모델 버전, SPEC 정보를 남깁니다.
 - omni: Omnigent 에이전트로도 등록합니다.
-- **지금:** 스킬 기반이 동작합니다. 담당자·담당 팀만 새 버전을 등록하고, 마지막 버전과 내용이 같거나 이미 있는 버전 번호면 막습니다. UC Skill 이름은 `<registry>.<agent_id>__<스킬 이름>`이고 주인은 aops 서버 서비스 주체입니다. `agent_versions`에는 해시·zip 경로·크기·스킬 해시·기본 하네스·SPEC을 남깁니다(SDK·UC 모델 버전은 설계). 코드·노코드는 501을 돌려줍니다.
+- **지금:** 스킬 기반이 동작합니다. 담당자·담당 팀만 새 버전을 등록하고, 마지막 버전과 내용이 같거나 이미 있는 버전 번호면 막습니다. UC Skill 이름은 `<registry>.<agent_id>__<스킬 이름>`이고, 첫 배포 때 aops 서버 서비스 주체가 주인으로 만듭니다. `agent_versions`에는 해시·zip 경로·크기·스킬 해시·기본 하네스·SPEC을 남깁니다(SDK·UC 모델 버전은 설계). 코드·노코드는 501을 돌려줍니다.
 
 ### `aops validate`
 
@@ -246,6 +247,7 @@ aops validate [--version x.y.z] [--local]
 
 ```bash
 aops deploy [--version x.y.z] [--reason <이유>] [--target <workspace>]
+aops deploy --cancel
 aops deploy --dev
 ```
 
@@ -263,11 +265,29 @@ aops deploy --dev
 - omni: Omnigent 관리형 에이전트로 게시하고 정책을 함께 넣습니다.
 - **지금:** 스킬 기반이 동작합니다.
   - 같은 버전을 다시 요청하면 진행 중인 요청을 이어서 보여 주고, 다른 버전의 요청이 진행 중이면 막습니다.
-  - 이 버전·이 정책으로 통과한 검사가 없으면 validate Job을 먼저 돌립니다(`exempt`면 건너뜀). 실패하면 승인자에게 가기 전에 반려합니다.
-  - 승인: 정책이 `auto`면 `policy:auto`로 자동 승인합니다. `required`면 승인자가 aops 서버 API(`POST /api/v1/release-gates/{gate_id}/approve`)로 합니다. console 화면은 설계입니다. `optional`은 아직 `required`와 같게 동작합니다(검사 방식 `optional`도 `mandatory`와 같음).
-  - 배포 Job(`aops-deploy`, 서비스 주체 실행)이 승인과 zip 해시를 다시 확인하고, 스킬마다 UC Skill 내용을 이 버전으로 바꿉니다. CLI는 단계마다 한 줄씩 보여 줍니다.
+  - 이 버전·이 정책으로 통과한 검사가 없으면 validate Job을 먼저 돌립니다(`exempt`면 건너뜀). 실패하면 `mandatory`는 승인자에게 가기 전에 반려하고, `optional`은 실패 결과를 남긴 채 승인자에게 넘깁니다(승인 방식이 `auto`여도 사람이 판단).
+  - 승인: `auto`면 `policy:auto`로 자동 승인합니다. `optional`이면 SPEC의 중요도가 `low`이고 민감도가 `public`·`internal`일 때만 자동 승인하고, 아니면 승인자가 필요합니다(이유가 `decision_reason`에 남음). `required`면 늘 승인자가 [`aops approve`](#aops-gates--approve--reject)로 합니다. console 화면은 설계입니다.
+  - 사람이 판단해야 하면 CLI는 gate ID와 승인·반려·취소 명령을 보여 주고 끝납니다. `aops deploy`를 다시 치면 그 요청을 이어서 보여 줍니다.
+  - `--cancel`: 요청자나 담당자·담당 팀이 검사 중·승인 대기인 요청을 취소합니다(`gate_canceled`). 운영 반영 뒤에는 이전 버전을 배포해 되돌립니다.
+  - 배포 Job(`aops-deploy`, 서비스 주체 실행)이 승인과 zip 해시를 다시 확인하고, 스킬마다 UC Skill을 처음이면 만들고 아니면 내용을 이 버전으로 바꿉니다. 이전 운영 버전에 있던 스킬이 이 버전에 없으면 지우지 않고 Job 출력에 알립니다.
   - 운영 버전보다 낮은 버전을 `--version`으로 배포하면 되돌리기(`rollback`)로 기록합니다.
   - `--dev`, `--target`, 운영 기록 켜기, 가드레일 패키지는 설계입니다.
+
+### `aops gates` · `approve` · `reject`
+
+```bash
+aops gates [--mine | --agent <agent_id>]
+aops approve <gate_id> [--comment <의견>]
+aops reject <gate_id> --reason <이유>
+```
+
+console 화면의 배포 요청·승인과 같은 일을 CLI로 합니다. 모두 aops 서버의 같은 승인 API를 불러서, 어느 화면에서 하든 규칙이 같습니다.
+
+- `gates`: 기본은 내가 승인할 차례인 요청(본인 요청 제외, 승인 그룹일 때)입니다. `--mine`은 내가 낸 요청, `--agent`는 한 에이전트의 요청을 최신 순으로 보여 줍니다. 승인 대기 이유(검사 실패, approval optional의 판단)도 함께 보여 줍니다.
+- `approve`: 승인 그룹만 할 수 있고 요청자 본인은 할 수 없습니다. 필요한 승인 수가 차면 배포 Job이 시작됩니다.
+- `reject`: 승인과 같은 규칙입니다. 요청자 본인은 반려 대신 `aops deploy --cancel`을 씁니다.
+- 승인·반려는 `approvals`와 `agent_events`(`gate_approved`·`gate_rejected`, 결재한 사람)에 남습니다.
+- **지금:** 동작합니다. 승인 그룹은 `aops admin setup --approver-group`으로 정하고, 비우면 요청자가 아닌 누구나 승인할 수 있습니다.
 
 ### `aops promote`
 
@@ -282,7 +302,7 @@ aops promote <agent_id> --to group:<그룹> [--to user:<이메일>] [--to sp:<ap
 - 그룹은 계정 그룹이어야 합니다. 작업 공간 그룹에는 Unity Catalog 권한을 줄 수 없습니다.
 - 운영 버전이 있어야 합니다. 요청자는 담당자·담당 팀이어야 하고, 서버가 보안 등급별 공개 범위를 검사합니다.
 - 권한은 Databricks 권한(Unity Catalog, 앱·Genie 권한)으로 걸리고 Databricks가 강제합니다. aops는 부여·회수 이력을 남깁니다.
-- **지금:** 스킬 기반이 동작합니다(UC Skill `READ_VOLUME` 부여·회수, `agent_events`에 기록). 담당자·담당 팀이 운영 버전이 있을 때만 할 수 있습니다. 보안 등급별 공개 범위 검사는 설계입니다.
+- **지금:** 스킬 기반이 동작합니다(UC Skill `READ_VOLUME` 부여·회수, `agent_events`에 기록). 사용자와 계정 그룹(`account users`) 대상으로 확인했습니다. 담당자·담당 팀이 운영 버전이 있을 때만 할 수 있습니다. 보안 등급별 공개 범위 검사는 설계입니다.
 
 ## 운영·관리
 
@@ -362,7 +382,7 @@ aops admin policy show|diff
   1. `tables`: 레지스트리 테이블 13개와 뷰 `agent_status`
   2. `policy`: 옵션의 검사·승인 방식으로 정책 버전을 올림 (`policy` 명령 대신)
   3. `dist`: Job이 설치할 aops 패키지를 빌드해 볼륨 `aops_dist`에 올림
-  4. `app`: aops 서버(Databricks App)를 배포하고 레지스트리·웨어하우스·패키지 경로를 환경변수로 넣음
+  4. `app`: aops 서버(Databricks App)를 배포하고 레지스트리·웨어하우스·패키지 경로를 환경변수로 넣음. 코드는 `/Workspace/aops/server/<앱>`(워크스페이스 관리자만 쓰기)에 올리고, 그 폴더에 쓸 수 있는 주체를 보여 줌. `/Workspace/Shared`는 모든 사용자가 `CAN_MANAGE`를 물려받아 쓰지 않습니다
   5. `grants`: 서버 서비스 주체에 카탈로그·스키마·`aops_dist` 권한 (사람에게는 사용·조회만)
   - validate·배포 Job은 서버가 처음 쓸 때 서비스 주체로 만들고, 서버의 패키지·설명이 바뀌면 Job 설정을 맞춥니다.
   - 번들 배포, monitor 뷰, 태그 정책, Apps telemetry, `policy` 명령은 설계입니다.

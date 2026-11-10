@@ -43,6 +43,10 @@ COMMANDS: list[Command] = [
     Command("등록·배포", "aops validate"),
     Command("등록·배포", "aops register"),
     Command("등록·배포", "aops deploy"),
+    Command("등록·배포", "aops deploy --cancel"),
+    Command("등록·배포", "aops gates"),
+    Command("등록·배포", "aops approve"),
+    Command("등록·배포", "aops reject"),
     Command("등록·배포", "aops promote"),
     Command("운영·관리", "aops monitor"),
     Command("운영·관리", "aops monitor dashboard"),
@@ -113,10 +117,11 @@ def markdown(app: FastAPI) -> str:
         "Databricks Apps 앞단이 오래 열린 응답·스트림을 끊을 수 있으므로, SSE는 10초 이하 간격으로 신호를 보내고 끊기면 `Last-Event-ID`로 이어 받습니다.",
         "- **실행 스트림:** 턴 실행 스트림은 AG-UI 이벤트입니다(`threadId`=세션, `runId`=턴). aops만의 정보는 `CUSTOM` 이벤트(`aops.handoff`, `aops.skill`, `aops.guardrail`, `aops.usage`)로 옵니다.",
         "- **값:** 상태·종류 같은 열거형은 영문 코드입니다. 한글 표시는 화면이 붙입니다.",
-        "- **지금 상태:** dbx 에디션의 스킬 기반 흐름은 aops 서버가 실제로 처리합니다: `register`, `validate`, `deploy`(승인 포함), "
-        "`promote`, `list`, `load`와 에이전트 이벤트(`POST …/registrations`, `POST …/validations`, `GET /validations/{id}`, "
-        "`POST …/deploy-requests`, `GET /release-gates/{id}`, `POST …/approve`, `POST …/promote`, `GET /agents`, "
-        "`POST …/load`, `GET …/archive`, `GET …/events`). 나머지는 요청·응답 형식만 정해져 있고 `501`을 돌려줍니다. "
+        "- **지금 상태:** dbx 에디션의 스킬 기반 흐름은 aops 서버가 실제로 처리합니다(14개 경로): `register`, `validate`, `deploy`, "
+        "`gates`·`approve`·`reject`·`deploy --cancel`, `promote`, `list`, `load`와 에이전트 이벤트(`POST …/registrations`, "
+        "`POST …/validations`, `GET /validations/{id}`, `POST …/deploy-requests`, `GET /release-gates`, `GET /release-gates/{id}`, "
+        "`POST …/approve`, `POST …/reject`, `POST …/cancel`, `POST …/promote`, `GET /agents`, `POST …/load`, `GET …/archive`, "
+        "`GET …/events`). 나머지는 요청·응답 형식만 정해져 있고 `501`을 돌려줍니다. "
         "서버에 `AOPS_REGISTRY`·`AOPS_WAREHOUSE_ID`가 없으면 모두 `501`입니다.",
         "",
         "## 명령 ↔ API",

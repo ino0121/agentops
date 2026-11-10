@@ -33,7 +33,7 @@
 | 4. 평가 | 채점·가드레일 시험 | MLflow 평가, 서비스 정책 | `evaluate` | 설계 |
 | 5. 등록 | 버전 저장 | Unity Catalog (Volume, 모델) | `register` | 동작 (Volume zip, UC Skill) |
 | 6. 검사 | 관리자 정책 자가 점검 | Lakeflow Jobs | `validate` | 동작 (검사 4가지) |
-| 7. 배포 | 배포 요청 → 승인 → 운영 반영 | aops 서버(console 화면), Agent Runtime, Genie, Unity Gateway Skills | `deploy` | 동작 (승인은 정책 자동 또는 API) |
+| 7. 배포 | 배포 요청 → 승인 → 운영 반영 | aops 서버(console 화면), Agent Runtime, Genie, Unity Gateway Skills | `deploy` | 동작 (승인: 정책 자동 또는 `aops approve`) |
 | 8. 운영 | 권한 부여·가져오기·모니터링 | Unity Catalog 권한, system tables, telemetry | `promote` `load` `monitor` | `promote`·`load`·`list` 동작, `monitor` 설계 |
 
 단계별로 쓰는 기능:
@@ -85,7 +85,7 @@ dbx는 local을 포함합니다. omni와 custom은 dbx 위에 화면을 붙이�
 ### aops 서버
 
 - dbx 이상은 조직에 aops 서버(Databricks App) 하나를 둡니다. 관리자가 `aops admin setup`으로 한 번 배포하고, 사용자는 CLI만 설치합니다.
-- 레지스트리 기록, Job 실행, 권한 변경은 서버가 서비스 주체로 합니다. 그래서 사람이 기록을 고치거나 자기 요청을 승인할 수 없습니다. 승인 화면(console)도 이 서버에 있습니다. **지금:** API만 있고 console 화면은 아직 없습니다.
+- 레지스트리 기록, Job 실행, 권한 변경은 서버가 서비스 주체로 합니다. 그래서 사람이 기록을 고치거나 자기 요청을 승인할 수 없습니다. 승인 화면(console)도 이 서버에 있습니다. **지금:** console 화면은 아직 없고, 승인은 같은 API를 부르는 `aops gates`·`approve`·`reject`로 합니다.
 - 개발(`init`·`run`·`session`·`evaluate` 등)은 서버 없이 됩니다. 등록·검사·배포·권한 부여와 스킬 `load`는 서버를 거칩니다.
 
 ### custom 에디션

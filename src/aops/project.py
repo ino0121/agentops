@@ -22,6 +22,7 @@ class Project:
     model: str | None = None
     instructions: str = "agent/instructions.md"
     skills: tuple[str, ...] = ("agent/skills/*",)
+    user_settings: bool = False  # Claude: also read the user's own settings (~/.claude: MCP servers, hooks, CLAUDE.md)
     handoff_tokens: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_HANDOFF_TOKENS))
     dbx: dict[str, Any] = field(default_factory=dict)
 
@@ -73,6 +74,7 @@ class Project:
             model=agent.get("model"),
             instructions=agent.get("instructions", "agent/instructions.md"),
             skills=tuple([skills] if isinstance(skills, str) else skills),
+            user_settings=bool(agent.get("user_settings", False)),
             handoff_tokens=tokens,
             dbx=dict(data.get("dbx", {})),
         )

@@ -1,4 +1,4 @@
-"""`aops register`, `validate`, `deploy`, `promote`, `list` and `load` (dbx edition, through the aops server)."""
+"""`aops register`, `validate`, `deploy`, `gates`·`approve`·`reject`, `promote`, `list` and `load` (dbx edition, through the aops server)."""
 
 from __future__ import annotations
 
@@ -36,8 +36,7 @@ def cmd_register(args: argparse.Namespace) -> int:
     _say(f"등록: {project.name} {row['version']} (상태 {row['status']})")
     _say(f"  볼륨: {row['artifact_path']}")
     for skill in row.get("skills") or []:
-        where = skill.get("uc_name") or "UC Skill 게시 건너뜀"
-        _say(f"  스킬 {skill['skill_alias']} → UC Skill {where}")
+        _say(f"  스킬 {skill['skill_alias']} → 배포하면 UC Skill {skill.get('uc_name')}에 반영")
     return 0
 
 
@@ -84,10 +83,13 @@ def _print_steps(run: dict[str, Any]) -> None:
 def cmd_deploy(args: argparse.Namespace) -> int:
     project = _project()
     server = Server(project)
+    if args.cancel:
+        return _cancel(server, project.name)
     gate = server.request("POST", f"/projects/{project.name}/deploy-requests", body={"version": args.version, "reason": args.reason})
     _say(f"배포 요청: {project.name} {gate['version']} (변경 폭 {gate['upgrade_type']}, 검사 {gate['validation_policy_mode']}, "
          f"승인 {gate['approval_mode']})")
     seen: set[str] = set()
+    pending_since: float | None = None
     while True:
         detail = _poll(server, f"/release-gates/{gate['gate_id']}")
         state = (detail["decision"], detail.get("deployment_status"))
@@ -96,19 +98,87 @@ def cmd_deploy(args: argparse.Namespace) -> int:
             _report_gate(detail)
         if detail["decision"] in ("rejected", "canceled") or detail.get("deployment_status") in ("succeeded", "failed"):
             return 0 if detail.get("deployment_status") == "succeeded" else 1
+        waiting_for_person = person_decides(detail)
+        pending_since = (pending_since or time.time()) if waiting_for_person else None
+        if waiting_for_person and (detail["approval_mode"] == "required" or detail.get("decision_reason")
+                                   or time.time() - pending_since > 8):
+            _say(f"  승인자에게 요청됨 (gate {detail['gate_id']}). 승인자: aops approve {detail['gate_id']} · "
+                 f"반려: aops reject {detail['gate_id']} --reason <이유>")
+            _say("  aops deploy를 다시 치면 이어서 보여 줍니다 · 취소: aops deploy --cancel")
+            return 0
         time.sleep(3)
+
+
+
+def person_decides(gate: dict[str, Any]) -> bool:
+    """A person has to act: approval required/optional without auto approval, or a failed check under optional validation."""
+    return gate["decision"] == "pending_approval" and (gate["approval_mode"] != "auto" or bool(gate.get("decision_reason")))
+
+
+def _cancel(server: Server, agent_id: str) -> int:
+    page = server.request("GET", f"/release-gates?agent_id={agent_id}")
+    open_gates = [g for g in page["items"] if g["decision"] in ("validating", "pending_approval")]
+    if not open_gates:
+        _say(f"{agent_id}: 취소할 배포 요청이 없습니다")
+        return 0
+    gate = server.request("POST", f"/release-gates/{open_gates[0]['gate_id']}/cancel")
+    _say(f"취소: {agent_id} {gate['version']} (gate {gate['gate_id']}, {gate['decision']})")
+    return 0
+
+
+def cmd_gates(args: argparse.Namespace) -> int:
+    here = Project.find()
+    server = Server(here if here.is_project else None)
+    if args.mine:
+        query = "?mine=true"
+    elif args.agent:
+        query = f"?agent_id={args.agent}"
+    else:
+        query = "?to_approve=true"
+    rows = server.request("GET", f"/release-gates{query}")["items"]
+    if not rows:
+        _say("승인할 배포 요청이 없습니다" if query == "?to_approve=true" else "배포 요청이 없습니다")
+        return 0
+    _say(f"{'gate':<34} {'에이전트':<18} {'버전':<8} {'변경 폭':<8} {'상태':<17} 요청자")
+    for g in rows:
+        _say(f"{g['gate_id']:<34} {g['agent_id']:<18} {g['version']:<8} {g['upgrade_type']:<8} {g['decision']:<17} {g['requester']}")
+        if g.get("decision_reason"):
+            _say(f"{'':<34} └ {g['decision_reason']}")
+    return 0
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    here = Project.find()
+    gate = Server(here if here.is_project else None).request(
+        "POST", f"/release-gates/{args.gate_id}/approve", body={"comment": args.comment})
+    state = "배포 Job 시작" if gate["decision"] == "approved" else f"승인 {gate['approvals']}/{gate['required_approvals']}"
+    _say(f"승인: {gate['agent_id']} {gate['version']} (gate {gate['gate_id']}) → {state}")
+    return 0
+
+
+def cmd_reject(args: argparse.Namespace) -> int:
+    here = Project.find()
+    gate = Server(here if here.is_project else None).request(
+        "POST", f"/release-gates/{args.gate_id}/reject", body={"reason": args.reason})
+    _say(f"반려: {gate['agent_id']} {gate['version']} (gate {gate['gate_id']}) · {gate.get('decision_reason') or ''}")
+    return 0
 
 
 def _report_gate(gate: dict[str, Any]) -> None:
     decision, deployment = gate["decision"], gate.get("deployment_status")
     if decision == "validating":
         _say("  Gate: validate Job으로 검사 중…")
+    elif decision == "pending_approval" and gate.get("decision_reason"):
+        if gate.get("validation"):
+            _print_steps(gate["validation"])
+        _say(f"  {gate['decision_reason']}")
     elif decision == "pending_approval":
-        _say("  Gate 통과 → " + ("정책 자동 승인 중…" if gate["approval_mode"] == "auto" else "승인 대기 (console 화면)"))
+        _say("  Gate 통과 → " + ("정책 자동 승인 중…" if gate["approval_mode"] == "auto" else "승인 대기"))
     elif decision == "approved" and deployment == "running":
         if gate.get("validation"):
             _print_steps(gate["validation"])
-        _say(f"  승인됨 ({'정책 자동 승인' if gate['approval_mode'] == 'auto' else '승인자'}) → 배포 Job 실행 중…")
+        who = gate.get("approved_by")
+        _say(f"  승인됨 ({'정책 자동 승인' if who == 'policy:auto' else f'승인자 {who}' if who else '승인'}) → 배포 Job 실행 중…")
     elif deployment == "succeeded":
         _say(f"  운영 반영 완료: {gate['agent_id']} {gate['version']} (UC Skill 내용이 이 버전으로 바뀌었습니다)")
     elif deployment == "failed":
@@ -174,6 +244,16 @@ def add_commands(sub: argparse._SubParsersAction) -> dict[str, Any]:
     p = sub.add_parser("deploy", help="배포 요청 → 검사·승인 → 운영 반영")
     p.add_argument("--version")
     p.add_argument("--reason")
+    p.add_argument("--cancel", action="store_true", help="진행 중인 배포 요청 취소 (요청자·담당 팀)")
+    p = sub.add_parser("gates", help="배포 요청 목록 (기본: 내가 승인할 차례인 것)")
+    p.add_argument("--mine", action="store_true", help="내가 낸 요청")
+    p.add_argument("--agent", help="이 에이전트의 요청")
+    p = sub.add_parser("approve", help="배포 요청 승인 (승인 그룹, 요청자 본인 불가)")
+    p.add_argument("gate_id")
+    p.add_argument("--comment")
+    p = sub.add_parser("reject", help="배포 요청 반려 (승인 그룹, 요청자 본인 불가)")
+    p.add_argument("gate_id")
+    p.add_argument("--reason", required=True)
     p = sub.add_parser("promote", help="대상자 권한 부여")
     p.add_argument("agent_id")
     p.add_argument("--to", action="append", required=True, help="group:<계정 그룹> | user:<이메일> | sp:<application ID>")
@@ -184,7 +264,8 @@ def add_commands(sub: argparse._SubParsersAction) -> dict[str, Any]:
     p.add_argument("agent_id")
     p.add_argument("--version")
     p.add_argument("--dir")
-    return {"register": cmd_register, "validate": cmd_validate, "deploy": cmd_deploy, "promote": cmd_promote,
+    return {"register": cmd_register, "validate": cmd_validate, "deploy": cmd_deploy, "gates": cmd_gates,
+            "approve": cmd_approve, "reject": cmd_reject, "promote": cmd_promote,
             "list": cmd_list, "load": cmd_load}
 
 

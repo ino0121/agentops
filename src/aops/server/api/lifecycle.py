@@ -85,6 +85,7 @@ class ReleaseGate(BaseModel):
     decision: GateDecision = Field(description="심사 상태 (`release_gates.decision`)")
     required_approvals: int = Field(examples=[1])
     approvals: int = Field(examples=[0])
+    approved_by: str | None = Field(None, examples=["policy:auto"], description="마지막으로 승인한 사람. 정책의 자동 승인은 policy:auto")
     deployment_id: str | None = Field(None, description="승인 뒤 배포 Job이 만든 배포")
     deployment_status: Literal["running", "succeeded", "failed"] | None = Field(None, description="배포 Job의 진행 상태")
     decision_reason: str | None = Field(None, description="반려 사유 등")
@@ -138,7 +139,7 @@ async def stream_validation(validation_run_id: str) -> AsyncIterable[ProgressEve
 
 @router.post(
     "/projects/{project_id}/registrations", status_code=201, summary="버전 저장 (최초 1.0.0)",
-    **command("aops register", DBX, note="검증을 요구하지 않는다(강제는 deploy 요청의 Gate). 에이전트 볼륨에 버전 zip을 한 번만 쓴다. 스킬은 첫 등록 때 UC Skill을 만든다(소유 aops 서비스 주체, 읽는 사람 없음). 코드는 UC 모델 버전도 만든다. 노코드는 deploy가 성공할 때 자동 등록한다."),
+    **command("aops register", DBX, note="검증을 요구하지 않는다(강제는 deploy 요청의 Gate). 에이전트 볼륨에 버전 zip을 한 번만 쓴다. 스킬의 UC Skill은 첫 deploy 때 배포 Job이 만든다(소유 aops 서비스 주체, 읽는 사람 없음). 코드는 UC 모델 버전도 만든다. 노코드는 deploy가 성공할 때 자동 등록한다."),
 )
 def register(
     project_id: str, request: Request,
@@ -180,12 +181,16 @@ def promote(agent_id: str, body: PromoteRequest, request: Request) -> list[Grant
 
 @router.get(
     "/release-gates", summary="배포 심사 목록",
-    **command(None, DBX, screen="console 배포 요청·승인"),
+    **command("aops gates", DBX, screen="console 배포 요청·승인",
+              note="`to_approve`: 이 사람이 승인할 차례인 요청(본인 요청 제외, 승인 그룹일 때). `mine`: 내가 낸 요청. 최신 100개"),
 )
 def list_gates(
-    decision: GateDecision | None = None, mine: bool = False, to_approve: bool = False, cursor: str | None = None,
+    request: Request, decision: GateDecision | None = None, mine: bool = False, to_approve: bool = False,
+    agent_id: str | None = None, cursor: str | None = None,
 ) -> Page[ReleaseGate]:
-    raise todo(None)
+    svc = service_for("aops gates")
+    rows = svc.gates(caller_of(request, svc), decision, mine, to_approve, agent_id)
+    return Page[ReleaseGate](items=[_gate(r) for r in rows], next_cursor=None)
 
 
 @router.get("/release-gates/{gate_id}", summary="배포 심사 보기", **command(None, DBX, screen="console 배포 요청·승인"))
@@ -199,21 +204,29 @@ def get_gate(gate_id: str, request: Request) -> ReleaseGateDetail:
 
 @router.post(
     "/release-gates/{gate_id}/approve", summary="승인",
-    **command(None, DBX, screen="console [승인]", note="승인 그룹만, 요청자 본인은 불가. 필요한 승인 수가 차면 배포 Job이 시작된다."),
+    **command("aops approve", DBX, screen="console [승인]", note="승인 그룹만, 요청자 본인은 불가. 필요한 승인 수가 차면 배포 Job이 시작된다."),
 )
 def approve(gate_id: str, body: DecisionBody, request: Request) -> ReleaseGate:
-    svc = service_for(None)
+    svc = service_for("aops approve")
     return _gate(svc.approve(caller_of(request, svc), gate_id, body.comment))
 
 
-@router.post("/release-gates/{gate_id}/reject", summary="반려", **command(None, DBX, screen="console [반려]"))
-def reject(gate_id: str, body: RejectBody) -> ReleaseGate:
-    raise todo(None)
+@router.post(
+    "/release-gates/{gate_id}/reject", summary="반려",
+    **command("aops reject", DBX, screen="console [반려]", note="승인과 같은 규칙(승인 그룹, 요청자 본인 불가). 요청자는 취소를 쓴다."),
+)
+def reject(gate_id: str, body: RejectBody, request: Request) -> ReleaseGate:
+    svc = service_for("aops reject")
+    return _gate(svc.reject(caller_of(request, svc), gate_id, body.reason))
 
 
-@router.post("/release-gates/{gate_id}/cancel", summary="요청 취소 (요청자)", **command(None, DBX, screen="console 배포 요청"))
-def cancel_gate(gate_id: str) -> ReleaseGate:
-    raise todo(None)
+@router.post(
+    "/release-gates/{gate_id}/cancel", summary="요청 취소 (요청자)",
+    **command("aops deploy --cancel", DBX, screen="console 배포 요청", note="요청자나 담당자·담당 팀이 검사 중·승인 대기인 요청을 취소한다."),
+)
+def cancel_gate(gate_id: str, request: Request) -> ReleaseGate:
+    svc = service_for("aops deploy --cancel")
+    return _gate(svc.cancel(caller_of(request, svc), gate_id))
 
 
 @router.post(

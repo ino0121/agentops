@@ -2,7 +2,7 @@
 
 [README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md)
 
-> **지금 동작하는 범위:** 스킬 기반. 정책은 `aops admin setup`의 옵션으로 정하고, 승인은 aops 서버 API로 합니다. console 화면, `aops admin policy`, 코드·노코드 경로는 설계입니다. 아래에서 **지금:**으로 표시한 줄이 현재 구현입니다.
+> **지금 동작하는 범위:** 스킬 기반. 정책은 `aops admin setup`의 옵션으로 정하고, 승인은 `aops gates`·`approve`·`reject`(aops 서버의 승인 API)로 합니다. console 화면, `aops admin policy`, 코드·노코드 경로는 설계입니다. 아래에서 **지금:**으로 표시한 줄이 현재 구현입니다.
 
 ## 관리자 정책
 
@@ -17,15 +17,15 @@
 | 평가 | 필수 평가 데이터셋, 최소 점수 | validate |
 | 노코드 | Genie 정의 작성 규칙과 수준(오류·경고), 서비스 중요도별 벤치마크 정확도 기준 | validate |
 | 운영 기록 | 배포 에이전트의 MLflow tracing·Apps telemetry | 배포 Job |
-| 검증 방식 | `mandatory`(기본, 통과한 검사 필요)·`optional`·`exempt` | deploy |
-| 승인 | 승인 그룹, 필요한 승인 수, 자기 승인 금지, 승인 방식(`required` 기본·`optional`·`auto`), 결재 채널(console 기본·외부 결재 확장) | deploy, console 화면 |
+| 검증 방식 | `mandatory`(기본, 통과한 검사 필요)·`optional`(검사는 돌리고, 실패해도 결과를 남긴 채 승인자가 판단)·`exempt`(검사 없음) | deploy |
+| 승인 | 승인 그룹, 필요한 승인 수, 자기 승인 금지, 승인 방식(`required` 기본·`optional`(SPEC 중요도 `low`이고 민감도 `public`·`internal`이면 자동, 아니면 승인자)·`auto`), 결재 채널(console 기본·외부 결재 확장) | deploy, console 화면 |
 | 보안 등급 | 등급 목록, 등급별 공개 범위 | validate, promote |
 | 재검증 | 정책이 바뀌면 이전 정책의 검사로 배포할 수 있는지 | deploy |
 
 - 개발 단계의 기록·가드레일·평가 여부는 정책 항목이 될 수 없습니다. 정책은 등록·배포되는 결과물만 봅니다.
 - 정책을 올리는 명령은 `aops admin policy set`입니다(설계).
 - **지금:**
-  - 정책은 `aops admin setup --validation-mode mandatory|optional|exempt --approval-mode required|optional|auto --approver-group <그룹>`으로 정합니다. 승인 수는 1명, 보안 등급은 `general`·`important`·`secret`입니다. 정책이 없으면 `mandatory`·`required`를 씁니다.
+  - 정책은 `aops admin setup --validation-mode mandatory|optional|exempt --approval-mode required|optional|auto --approver-group <그룹>`으로 정합니다. 승인 수는 1명, 보안 등급은 `general`·`important`·`secret`입니다. 정책이 없으면 `mandatory`·`required`를 씁니다. 세 가지 검사 방식과 세 가지 승인 방식이 모두 위 표의 뜻대로 동작합니다.
   - 검사는 스킬 기반의 네 가지입니다: `format`(SPEC.md 필수 항목과 허용 값), `skills`(Agent Skills 형식, 이름 = 폴더 이름, description 1~1024자), `secrets`(토큰·키 패턴, `.env`·`*.pem`·`id_rsa`), `record`(볼륨의 zip이 등록 때 해시와 같은지). `init` 템플릿을 고치지 않은 채면(`my-skill`, 템플릿 description) 반려합니다.
   - 평가·가드레일·호환 검사, 보안 등급별 공개 범위, 재검증 규칙은 설계입니다.
 
@@ -38,7 +38,7 @@
 - **모니터링:** `aops monitor`와 같은 데이터
 - **배포 이력**
 - 레지스트리 쓰기, Job 실행, UC Skill·권한 변경은 서버의 서비스 주체가 합니다. 사람은 요청만 하고, 레지스트리는 조회만 합니다.
-- **지금:** API만 엽니다(경로 79개 중 11개 동작, [API](api.md)). console 화면과 모니터링은 아직 없어서, 정책이 `required`면 승인자가 `POST /api/v1/release-gates/{gate_id}/approve`를 직접 부릅니다. 요청자 본인 승인과 승인 그룹 밖의 승인은 서버가 막습니다.
+- **지금:** API만 엽니다(경로 79개 중 14개 동작, [API](api.md)). console 화면과 모니터링은 아직 없어서, 승인자는 `aops gates`로 대기 요청을 보고 `aops approve`·`aops reject`로 결재합니다(같은 승인 API). 요청자 본인 승인·반려와 승인 그룹 밖의 결재는 서버가 막고, 요청자는 `aops deploy --cancel`로 취소합니다. 서버 코드는 `/Workspace/aops/server/<앱>`에 있고 워크스페이스 관리자만 고칠 수 있습니다.
 
 ## 권한과 가져오기
 
@@ -54,8 +54,8 @@
 
 | 시점 | 목록 (`list`) | 버전 zip | UC Skill | `load` |
 | --- | --- | --- | --- | --- |
-| `register` 뒤 | 조직 사용자 모두 | 서비스 주체만 (`load`로 담당자·담당 팀에게) | 만들어졌지만 읽는 사람 없음 | 담당자·담당 팀만 |
-| `deploy` 뒤 | 같음 | 같음 | 운영 버전으로 바뀜 | 담당자·담당 팀 |
+| `register` 뒤 | 조직 사용자 모두 | 서비스 주체만 (`load`로 담당자·담당 팀에게) | 아직 없음 | 담당자·담당 팀만 |
+| `deploy` 뒤 | 같음 | 같음 | 처음 배포면 만들어지고(읽는 사람 없음), 늘 운영 버전 내용 | 담당자·담당 팀 |
 | `promote` 뒤 | 같음 | 같음 | 대상자에게 `READ_VOLUME` | 대상자는 운영 버전만 |
 
 - 대상 그룹은 계정 그룹이어야 합니다. 작업 공간 그룹에는 Unity Catalog 권한을 줄 수 없습니다.
@@ -71,15 +71,15 @@
 | `policies` | 관리자 정책과 버전 | `aops admin setup` |
 | `agents` | 등록된 에이전트와 SPEC 정보 (담당자·담당 팀·중요도·민감도) | `register` (노코드는 배포 Job) |
 | `agent_versions` | 저장된 버전, 버전 zip 경로·해시·크기, 상태(`registered`·`production`·`retired`) | `register`, 배포 Job |
-| `agent_version_skills` | 버전마다 들어 있는 스킬과 UC Skill 이름·해시 | `register` |
+| `agent_version_skills` | 버전마다 들어 있는 스킬과 UC Skill 이름(첫 배포 때 만들어짐)·해시 | `register` |
 | `genie_agents` | 노코드: 개발용·운영용 Genie Agent와 에이전트 폴더 | 노코드 경로 (설계) |
 | `validation_runs` | 검사 결과 (정책 버전, 검사별 결과, 실패 이유) | validate Job |
 | `eval_results` | 평가 점수 | 평가 (설계) |
-| `release_gates` | 배포 요청과 판정 (`validating` → `pending_approval` → `approved`·`rejected`) | `deploy`, aops 서버 |
+| `release_gates` | 배포 요청과 판정 (`validating` → `pending_approval` → `approved`·`rejected`·`canceled`). 승인 대기 이유는 `decision_reason` | `deploy`, aops 서버 |
 | `approvals` | 승인·반려 이력 (추가만). 자동 승인은 `policy:auto` | aops 서버 |
 | `deployments` | 배포 결과 (`running`·`succeeded`·`failed`) | aops 서버, 배포 Job |
 | `agent_production` | 에이전트별 운영 버전과 이전 버전 | 배포 Job |
-| `agent_events` | 감사 이력: `register`·`gate_*`·`validate`·`deploy`·`rollback`·`promote`·`load` | 각 단계 |
+| `agent_events` | 감사 이력: `register`·`gate_requested`·`validate`·`gate_approved`·`gate_rejected`·`gate_canceled`·`deploy`·`rollback`·`promote`·`load` | 각 단계 |
 | `rate_cards` | 모델별 단가 (비용 계산용) | 관리자 (설계) |
 | `agent_status` (뷰) | 에이전트별 최신 버전, 운영 버전, 상태, 담당 (`aops list`가 읽음) | – |
 

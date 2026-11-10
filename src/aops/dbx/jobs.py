@@ -47,6 +47,8 @@ def print_deploy(gate_id: str, registry: str, report: dict[str, Any]) -> None:
         say(f"\n  UC Skill {skill['uc_name']}: {words.get(skill['action'], skill['action'])}")
         for rel in skill["files"]:
             say(f"    {rel}")
+    for name in report.get("not_in_version") or []:
+        say(f"\n  UC Skill {name}: 이 버전에는 없는 스킬 (지우지 않고 그대로 둠. 쓰던 사람은 이전 내용을 계속 받음)")
     say(f"\n결과: {report['status']} → {registry}.agent_production · deployments · agent_events")
 
 

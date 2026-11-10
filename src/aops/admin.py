@@ -19,6 +19,9 @@ from typing import Any
 STEPS = ("tables", "policy", "dist", "app", "grants")
 PACKAGE = Path(__file__).resolve().parent
 REPO = PACKAGE.parents[1]  # the source checkout, when aops runs from one
+# Server code lives under the workspace root, where only admins have rights (and they flow down).
+# /Workspace/Shared would not do: it gives every user CAN_MANAGE, which a child folder cannot take away.
+APP_ROOT = "/Workspace/aops/server"
 APP_REQUIREMENTS = "fastapi>=0.162\nuvicorn>=0.54\npython-multipart>=0.0.20\ndatabricks-sdk>=0.158\n"
 
 
@@ -105,7 +108,8 @@ def cmd_admin(args: argparse.Namespace) -> int:
 
     app = None
     if "app" in steps:
-        print(f"\n[app] aops 서버 앱 {args.app}: SQL warehouse 자원(CAN USE), 사용자 권한 범위 files, 코드 배포")
+        print(f"\n[app] aops 서버 앱 {args.app}: SQL warehouse 자원(CAN USE), 사용자 권한 범위 files, "
+              f"코드 {APP_ROOT}/{args.app} (워크스페이스 관리자만 쓰기)")
         if args.apply:
             app = _deploy_app(w, args, wheel_path, me)
             print(f"  {app.url}  (서비스 주체 {app.service_principal_client_id})")
@@ -157,8 +161,27 @@ def _deploy_app(w: Any, args: argparse.Namespace, wheel_path: str | None, me: st
         key = "valueFrom" if "valueFrom" in item else "value"
         lines.append(f"  - name: {item['name']}\n    {key}: {json.dumps(item[key])}")
     (build / "app.yaml").write_text("\n".join(lines) + "\n")
-    target = f"/Workspace/Users/{me}/{args.app}"
+    target = f"{APP_ROOT}/{args.app}"
+    w.workspace.mkdirs(target)
     subprocess.run(["databricks", "workspace", "import-dir", str(build), target, "--overwrite", "-p", args.profile],
                    check=True, capture_output=True)
     w.apps.deploy_and_wait(args.app, AppDeployment(source_code_path=target))
+    _report_code_folder(w, target)
+    old = f"/Workspace/Users/{me}/{args.app}"
+    try:
+        w.workspace.get_status(old)
+        print(f"  옛 코드 위치 {old}는 더 쓰지 않습니다 (지워도 됩니다)")
+    except Exception:
+        pass
     return w.apps.get(args.app)
+
+
+def _report_code_folder(w: Any, path: str) -> None:
+    """Who can change the server code: should be workspace admins only."""
+    status = w.workspace.get_status(path)
+    acl = w.workspace.get_permissions("directories", str(status.object_id)).access_control_list or []
+    writers = sorted({a.group_name or a.user_name or a.service_principal_name for a in acl
+                      for p in (a.all_permissions or []) if p.permission_level and p.permission_level.value in ("CAN_EDIT", "CAN_MANAGE")})
+    print(f"  코드 폴더 쓰기 권한: {', '.join(writers) or '없음'}")
+    if any(name in ("users", "account users") for name in writers):
+        print("  aops: 모든 사용자가 서버 코드를 고칠 수 있습니다. 폴더 권한을 확인하세요")
