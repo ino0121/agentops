@@ -102,15 +102,22 @@ class ReleaseGate(BaseModel):
     deployment_status: Literal["running", "succeeded", "failed"] | None = Field(None, description="배포 Job의 진행 상태")
     decision_reason: str | None = Field(None, description="반려 사유 등")
     validation_run_id: str | None = Field(None, description="근거 검사 실행")
+    approvers: list[str] = Field(default_factory=list, examples=[["lead@example.com"]],
+                                 description="지정 승인자 (요청 때 SPEC.md approvers). 있으면 이 사람·그룹만 승인하고 자동 승인하지 않는다")
+    reason: str | None = Field(None, description="요청 사유")
+    review_verdict: Literal["pass", "warn", "fail"] | None = Field(None, description="근거 평가의 내용 검토 판정 (목록)")
 
 
 class ReleaseGateDetail(ReleaseGate):
-    evaluation: EvaluationRun | None = Field(None, description="근거 평가(Gate) 실행과 문항별 결과")
+    evaluation: EvaluationRun | None = Field(None, description="근거 평가(Gate) 실행과 문항별 결과, 내용 검토 리포트")
+    can_approve: bool = Field(False, description="이 요청을 지금 부른 사람이 승인·반려할 수 있는지")
+    approve_as_exception: bool = Field(False, description="그 승인이 개발용 예외(정책 dev_approvers)로만 되는지: 본인 요청이거나 지정 승인자가 아님")
     history: list[Approval] = Field(default_factory=list)
 
 
 class DecisionBody(BaseModel):
     comment: str | None = Field(None, examples=["평가·가드레일 확인함"])
+    validation_run_id: str | None = Field(None, description="승인자가 본 리포트(평가 실행). 요청에 리포트가 있으면 이 값이 같아야 승인된다")
 
 
 class RejectBody(BaseModel):
@@ -243,6 +250,7 @@ def register(
     workspace_path: str | None = Form(None, description="zip·파일 대신 워크스페이스 폴더 (/Workspace/...). 서버가 요청자의 토큰으로 읽어 같은 규칙으로 묶는다 (앱의 workspace.workspace 사용자 권한 범위)"),
     version: str | None = Form(None, description="`--version`. 비우면 register가 매긴다 (최초 1.0.0)"),
     bump: Literal["fix", "minor", "major"] | None = Form(None, description="버전을 올리는 폭. 비우면 minor"),
+    note: str | None = Form(None, description="`--note`: 등록 사유 (선택, 500자). 버전에 남고 Git 커밋 메시지의 제목이 된다"),
 ) -> AgentVersionDetail:
     svc = service_for("aops register")
     if workspace_path and archive is None and not files:
@@ -250,7 +258,7 @@ def register(
         found, skipped = svc.read_workspace_folder(caller, workspace_path)
         data = package.build_entries([(rel, content, 0o644) for rel, content in found]).data
         source = {**svc.workspace_links(caller, workspace_path, dict(found)), "skipped": skipped}
-        row = svc.register(caller, project_id, data, version, bump, source=source)
+        row = svc.register(caller, project_id, data, version, bump, source=source, note=note)
         skills = [AgentVersionSkill(**s) for s in row.pop("skills", [])]
         return AgentVersionDetail(**{**row, "created_at": row["registered_at"], "spec": loads(row.get("spec")) or {}}, skills=skills)
     if archive is not None:
@@ -261,7 +269,7 @@ def register(
         raise ServiceError(400, "no_files", "버전 zip(archive), 폴더의 파일(files), 워크스페이스 폴더(workspace_path) 중 하나를 보내세요", "aops register")
     if len(data) > MAX_UPLOAD:
         raise ServiceError(413, "too_large", f"버전은 {MAX_UPLOAD // 2**20}MB까지입니다 (데이터는 UC 테이블·볼륨에 두세요)", "aops register")
-    row = svc.register(caller_of(request, svc), project_id, data, version, bump)
+    row = svc.register(caller_of(request, svc), project_id, data, version, bump, note=note)
     skills = [AgentVersionSkill(**s) for s in row.pop("skills", [])]
     return AgentVersionDetail(**{**row, "created_at": row["registered_at"], "spec": loads(row.get("spec")) or {}}, skills=skills)
 
@@ -309,11 +317,12 @@ def list_gates(
 @router.get("/release-gates/{gate_id}", summary="배포 심사 보기", **command(None, DBX, screen="console 배포 요청·승인"))
 def get_gate(gate_id: str, request: Request) -> ReleaseGateDetail:
     svc = service_for(None)
-    caller_of(request, svc)
+    caller = caller_of(request, svc)
     gate = svc.advance(gate_id)
     run = svc.evaluation(gate["validation_run_id"], results=True) if gate.get("validation_run_id") else None
     evaluation = EvaluationRun(**{**run, "results": [EvalResult(**r) for r in run.pop("results", [])]}) if run else None
-    return ReleaseGateDetail(**_gate(gate).model_dump(), evaluation=evaluation)
+    return ReleaseGateDetail(**_gate(gate).model_dump(), evaluation=evaluation, can_approve=svc.can_approve(caller, gate),
+                             approve_as_exception=svc.approval_exception(caller, gate))
 
 
 @router.post(
@@ -322,7 +331,7 @@ def get_gate(gate_id: str, request: Request) -> ReleaseGateDetail:
 )
 def approve(gate_id: str, body: DecisionBody, request: Request) -> ReleaseGate:
     svc = service_for("aops approve")
-    return _gate(svc.approve(caller_of(request, svc), gate_id, body.comment))
+    return _gate(svc.approve(caller_of(request, svc), gate_id, body.comment, body.validation_run_id))
 
 
 @router.post(

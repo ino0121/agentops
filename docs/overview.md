@@ -30,10 +30,10 @@
 | 1. 만들기 | 새 에이전트·개발 화면 | Agent Bricks, Genie, Workspace | `init` `dev` | `init` 동작 (스킬·코드 템플릿, 노코드 폴더·개발용 Genie), `dev` 설계 |
 | 2. 실험 | 구성별 비교 실행 | MLflow tracing, Sandbox | `run` | 스킬: 질문 하나 실행, 턴마다 MLflow trace |
 | 3. 세션 | 하네스 간 이어가기 | Agent sessions·memory | `session` | 스킬: 하네스 전환·인계 (세션은 내 PC) |
-| 4. 셀프 체크 | 형식 검사 (언제든, 기록 안 함) | 없음 (PC는 서버 없이), 노코드는 Genie API | `validate` | 동작 (세 종류) |
+| 4. 셀프 체크 | 템플릿 구성 체크리스트 (언제든, 기록 안 함) | 없음 (PC는 서버 없이), 노코드는 Genie API | `validate` | 동작 (세 종류, [규칙](validate.md)) |
 | 5. 등록 | 버전 저장 | Unity Catalog Volume | `register` | 동작 (노코드는 배포 성공 때 자동) |
-| 6. 평가 (Gate) | 형식 재검사 + 품질 평가, 배포 조건 | Lakeflow Jobs, 모델 서빙(답변·판정), Genie 벤치마크 | `evaluate` | 스킬·노코드 동작, 코드 기반 평가셋은 다음 단계 |
-| 7. 배포 | 배포 요청 → 승인 → 운영 반영 | aops 서버(console 화면), Databricks Apps, Genie, Unity Gateway Skills | `deploy` | 동작 (승인: 정책 자동 또는 `aops approve`) |
+| 6. 평가 (Gate) | 형식 재검사 → 내용 검토(모델이 모든 파일을 읽고 승인자용 리포트) → 품질 평가, 배포 조건 | Lakeflow Jobs, 모델 서빙(도구 호출·답변·판정), Genie 벤치마크 | `evaluate` | 세 종류 동작 (코드 기반 평가셋 실행은 다음 단계) |
+| 7. 배포 | 배포 요청 → 지정 승인자가 리포트를 보고 승인 → 운영 반영 | aops 서버(console 화면), Databricks Apps, Genie, Unity Gateway Skills | `deploy` | 동작 (승인: 지정 승인자·승인 그룹·정책 자동) |
 | 8. 운영 | 권한 부여·가져오기·모니터링 | Unity Catalog·앱·Genie 권한, system tables, telemetry | `promote` `load` `monitor` | `promote`·`load`·`list` 동작, `monitor` 설계 |
 
 단계별로 쓰는 기능:
@@ -42,7 +42,7 @@
 - **실험:** 실행마다 MLflow trace를 Unity Catalog에 남기고, Databricks Sandbox에서 격리해 실행할 수 있습니다. **지금:** `aops run`은 내 PC의 하네스로 돌고, trace는 내 MLflow 실험(`/Users/<나>/aops/<이름>`)에 턴마다 하나 남습니다(쓴 도구·스킬, 인계, 모델, 토큰, MLflow가 계산한 비용).
 - **세션:** 세션과 메모리를 Agent sessions·memory(Lakebase)에 저장해 다른 PC에서도 이어 갑니다.
 - **등록:** 에이전트마다 UC Volume을 하나 두고 버전을 zip으로 한 번만 씁니다. 코드 에이전트의 UC registered model 버전은 설계입니다.
-- **셀프 체크·평가:** `validate`는 만드는 중에 형식만 바로 보는 셀프 체크입니다(기록 안 함, 강제 없음). `evaluate`는 배포 전에 강제되는 평가(Gate)입니다. Lakeflow Job(서버리스, 서비스 주체)이 형식을 다시 검사하고 품질을 평가합니다: 스킬은 평가셋을 모델이 답하고 판정 모델이 채점, 노코드는 Genie 벤치마크 정확도와 회귀입니다. 결과는 Delta 테이블(`validation_runs`·`eval_results`)과 Job 출력에 남습니다. **지금:** 스킬·노코드는 동작, 코드 기반 평가셋 실행은 다음 단계. MLflow 평가(UC 평가 데이터셋)와 가드레일 시험은 설계입니다.
+- **셀프 체크·평가:** `validate`는 만드는 중에 템플릿대로 구성됐는지 바로 보는 셀프 체크입니다(규칙 체크리스트, 기록 안 함, 강제 없음, [규칙](validate.md)). `evaluate`는 배포 전에 강제되는 평가(Gate)입니다. Lakeflow Job(서버리스, 서비스 주체)이 형식을 다시 검사하고, 모델(모델 서빙, 도구 호출)이 에이전트의 모든 파일을 읽어 사내 정보·불필요한 내용 등을 관리자 프롬프트(버전 관리)의 체크리스트로 판정한 **승인자용 리포트**를 쓰고, 품질을 평가합니다: 스킬은 평가셋을 모델이 답하고 판정 모델이 채점, 노코드는 Genie 벤치마크 정확도와 회귀입니다. 승인자는 리포트를 보고 승인합니다. 결과는 Delta 테이블(`validation_runs`·`eval_results`·`review_prompts`)과 Job 출력에 남습니다. **지금:** 세 종류 동작, 코드 기반 평가셋 실행은 다음 단계. MLflow 평가(UC 평가 데이터셋)와 가드레일 시험은 설계입니다.
 - **배포:** 배포 요청은 평가(Gate) 결과와 승인(console 화면)을 거칩니다. 그 뒤 운영 앱(코드 기반, aops 서버가 배포), 운영용 Genie Agent(노코드, 배포 Job), Unity Gateway Skills의 내용(스킬 기반, 배포 Job)에 반영합니다. 되돌리기는 이전 버전을 다시 배포합니다.
 - **운영:** `promote`가 대상자에게 Databricks 권한을 줍니다. system tables(사용량·비용·감사·쿼리), Apps telemetry, 예산 API로 운영 현황을 봅니다.
 

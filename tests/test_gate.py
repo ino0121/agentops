@@ -137,6 +137,20 @@ class Sql:
         self.atomics.append(list(statements))
 
 
+REVIEW = {"verdict": "pass", "recommendation": "approve", "summary": "문제 없음", "opinion": "승인해도 됩니다",
+          "items": [{"id": "internal_info", "title": "사내 정보 없음", "status": "pass", "reason": "없음", "findings": []}],
+          "coverage": {"files_total": 5, "text_files": 5, "files_read": 5, "unread": [], "binary": [], "lines_total": 9, "lines_read": 9, "partial": []},
+          "prompts": {"common": 0, "skill": 0}, "model": "m", "turns": 2, "tokens": {"prompt": 1, "completion": 1}, "seconds": 1.0}
+
+
+@pytest.fixture(autouse=True)
+def canned_review(monkeypatch):
+    """The content review is a model call: every Gate test gets this report unless it sets its own."""
+    from aops.dbx import review
+
+    monkeypatch.setattr(review, "review", lambda w, files, kind, prompts, policy, agent_id: dict(REVIEW))
+
+
 def gate_service(files, kind="skill"):
     data = package.build_entries([(r, d, 0o644) for r, d in files.items()]).data
     sha = package.files_sha256(list(files.items()))
@@ -151,6 +165,7 @@ def gate_service(files, kind="skill"):
            "steps": [], "checks": {}, "policy_version": 1}
     svc.evaluation = lambda run_id, results=False: dict(run)
     svc._event_statement = lambda agent_id, version, kind_, actor, detail=None: (f"EVENT {kind_}", detail)
+    svc.active_prompts = lambda rows=None: {}
     return svc
 
 
@@ -160,9 +175,78 @@ def test_gate_runs_the_form_checks_then_the_evaluation_and_records_each_question
         {"name": "evaluate", "status": "passed", "detail": "정확도 100%"},
         [{"question_id": "q1", "question": "10개면?", "assessment": "GOOD", "reasons": ["맞음"], "expected": "5%", "generated": "5%"}]))
     report = svc.run_evaluation("r1")
-    assert [s["name"] for s in report["steps"]] == ["format", "skills", "secrets", "evaluate", "record"] and report["status"] == "passed"
+    assert [s["name"] for s in report["steps"]] == ["format", "config", "instructions", "skills", "evals", "secrets", "review", "evaluate", "record"] and report["status"] == "passed"
     statements = [s for s, _ in svc.sql.atomics[0]]
     assert any(s.startswith("INSERT INTO c.s.eval_results") for s in statements) and "EVENT evaluate" in statements
+    update = svc.sql.atomics[0][0][1]
+    assert update["checks"]["review"]["verdict"] == "pass" and report["review"]["summary"] == "문제 없음"  # the approver's report is kept
+
+
+def test_review_and_quality_findings_go_to_the_approver_and_stop_auto_approval(monkeypatch):
+    from aops.dbx import review
+
+    svc = gate_service(skill_files())
+    failing = {**REVIEW, "verdict": "fail", "items": [{**REVIEW["items"][0], "status": "fail"}]}
+    monkeypatch.setattr(review, "review", lambda *a: failing)
+    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy: ({"name": "evaluate", "status": "failed", "detail": "정확도 50%"}, []))
+    report = svc.run_evaluation("r1")
+    steps = {s["name"]: s for s in report["steps"]}
+    assert report["status"] == "passed"  # advisory: not rejected by the Gate itself
+    assert steps["review"]["status"] == "failed" and steps["review"]["advisory"] and steps["evaluate"]["advisory"]
+    svc.evaluation = lambda run_id, results=False: {"steps": report["steps"]}
+    assert svc._flagged("r1") == "승인자 판단 필요: 내용 검토 부적합, 품질 평가 기준 미달 (리포트 확인)"
+
+
+def test_a_review_that_cannot_run_goes_to_the_approver(monkeypatch):
+    from aops.dbx import review
+
+    def broken(*a):
+        raise review.ReviewError("검토 모델을 부르지 못했습니다")
+
+    monkeypatch.setattr(review, "review", broken)
+    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy: ({"name": "evaluate", "status": "passed", "detail": "ok"}, []))
+    svc = gate_service(skill_files())
+    report = svc.run_evaluation("r1")
+    step = next(s for s in report["steps"] if s["name"] == "review")
+    assert report["status"] == "passed" and step["status"] == "failed" and step["advisory"] and "검토 모델" in step["detail"]
+    assert svc.sql.atomics[0][0][1]["checks"]["review_error"] == "검토 모델을 부르지 못했습니다"
+    svc.evaluation = lambda run_id, results=False: {"steps": report["steps"]}
+    assert svc._flagged("r1") == "승인자 판단 필요: 내용 검토를 하지 못함 (리포트 확인)"  # never auto-approved
+
+
+def test_any_failure_of_the_review_is_still_the_approvers_call(monkeypatch):
+    from aops.dbx import review
+
+    def odd(*a):
+        raise ValueError("bad tool argument")
+
+    monkeypatch.setattr(review, "review", odd)
+    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy: ({"name": "evaluate", "status": "passed", "detail": "ok"}, []))
+    svc = gate_service(skill_files())
+    report = svc.run_evaluation("r1")
+    step = next(s for s in report["steps"] if s["name"] == "review")
+    assert report["status"] == "passed" and step["status"] == "failed" and step["advisory"]  # not an error that rejects
+    assert svc.sql.atomics[0][0][1]["checks"]["review_error"] == "ValueError: bad tool argument"
+
+
+def test_the_reviewer_asking_for_changes_also_needs_a_person():
+    svc = gate_service(skill_files())
+    svc.evaluation = lambda run_id, results=False: {"steps": [
+        {"name": "review", "status": "passed", "advisory": True, "verdict": "pass", "recommendation": "reject"},
+        {"name": "evaluate", "status": "passed", "advisory": True}]}
+    assert svc._flagged("r1") == "승인자 판단 필요: 검토 모델 권고 reject (리포트 확인)"
+    svc.evaluation = lambda run_id, results=False: {"steps": [{"name": "review", "status": "warned", "advisory": True, "recommendation": "approve"}]}
+    assert svc._flagged("r1") is None
+
+
+def test_only_evaluations_with_a_report_are_reused():
+    from aops.dbx.service import WITH_REVIEW
+
+    svc = gate_service(skill_files())
+    asked = []
+    svc.sql.one = lambda statement, params=None: asked.append(statement)
+    svc._passed_evaluation("a", "1.0.0", 1)
+    assert WITH_REVIEW in asked[0] and "checks:review IS NOT NULL" in WITH_REVIEW
 
 
 def test_gate_does_not_spend_on_evaluation_when_the_form_fails(monkeypatch):
@@ -176,7 +260,8 @@ def test_gate_does_not_spend_on_evaluation_when_the_form_fails(monkeypatch):
 
 
 def test_code_agents_skip_the_quality_step_for_now():
-    files = {"SPEC.md": SPEC.replace("build_type: skill", "build_type: code").encode(), "aops.toml": b"",
+    files = {"SPEC.md": SPEC.replace("build_type: skill", "build_type: code").encode(), "aops.toml": b'[project]\nname = "a"\ntype = "code"\n',
+             "agent/agent.py": b"agent = None\n",
              "agent.toml": b'[agent]\nframework = "openai"\nserver = "agentbricks"\n', "app.yaml": b"command: []\n",
              "pyproject.toml": b"[project]\nname='a'\n", "uv.lock": b""}
     report = gate_service(files, kind="code").run_evaluation("r1")
@@ -195,11 +280,12 @@ def test_no_code_gate_runs_benchmarks_on_the_dev_space_then_integrity(monkeypatc
     asked = []
     monkeypatch.setattr(gate_eval, "evaluate_genie", lambda w, space, spec_, policy, baseline: (
         asked.append(space) or {"name": "evaluate", "status": "passed", "detail": "ok"}, []))
-    monkeypatch.setattr(nocode, "check_steps", lambda files_, policy, fmt: [fmt, {"name": "definition", "status": "passed", "detail": ""}])
+    monkeypatch.setattr(nocode, "check_steps", lambda files_, policy, lookup=None: [{"name": "format", "status": "passed", "detail": ""},
+                                                                       {"name": "definition", "status": "passed", "detail": ""}])
     svc.integrity_step = lambda agent_id, files_: {"name": "integrity", "status": "passed", "detail": ""}
     svc._dev_definition = lambda genie_: definition
     report = svc.run_evaluation("r1")
-    assert asked == ["dev1"] and [s["name"] for s in report["steps"]] == ["format", "definition", "evaluate", "integrity", "record"]
+    assert asked == ["dev1"] and [s["name"] for s in report["steps"]] == ["format", "definition", "review", "evaluate", "integrity", "record"]
 
     # a registered version whose content is still the dev definition: the benchmarks speak for it
     sha = package.files_sha256(list(files.items()))
@@ -220,7 +306,7 @@ def test_self_check_reads_an_upload_and_records_nothing():
     svc.agent = lambda a: None  # not registered yet: an upload still works
     data = package.build_entries([(r, d, 0o644) for r, d in files.items()]).data
     result = svc.self_check(Caller("dev@x.com"), "a", data=data)
-    assert result["status"] == "passed" and [s["name"] for s in result["steps"]] == ["format", "skills", "secrets"]
+    assert result["status"] == "passed" and [s["name"] for s in result["steps"]] == ["format", "config", "instructions", "skills", "evals", "secrets"]
     assert svc.sql.statements == [] and svc.sql.atomics == []
     with pytest.raises(ServiceError) as error:
         svc.self_check(Caller("dev@x.com"), "a")  # nothing to check and nothing registered

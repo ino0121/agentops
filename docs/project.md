@@ -28,7 +28,7 @@ my-agent/
 - `aops run` 직전마다 aops가 원본(`agent/instructions.md`, `agent/skills/`)에서 하네스 설정을 다시 맞춥니다. 사본을 손으로 고치면 덮어쓰지 않고 알려 줍니다.
 - `aops register`의 버전 zip에는 원본만 들어갑니다. 하네스 설정(`CLAUDE.md`·`AGENTS.md`·`.claude/`·`.agents/`·`.codex/`)과 기록(`runs/`·`.aops/`)은 빼고, 받는 쪽(`aops load`)에서 다시 만듭니다.
 - 스킬은 [Agent Skills](https://agentskills.io) 형식입니다. 폴더 이름이 스킬 이름이고, `SKILL.md`의 `name`은 폴더 이름과 같아야 합니다. 하네스는 `description`을 보고 언제 이 스킬을 쓸지 고릅니다.
-- 템플릿(`my-skill`, SPEC·스킬의 템플릿 description)을 그대로 두면 `aops run`은 되지만 셀프 체크(`aops validate`)에서 실패로 나오고 배포 전 평가(Gate)에서 반려됩니다.
+- 템플릿(`my-skill`, SPEC·스킬의 템플릿 description)을 그대로 두면 `aops run`은 되지만 셀프 체크(`aops validate`)에서 ERROR로 나오고 배포 전 평가(Gate)에서 반려됩니다. 지시·스킬 본문·SPEC 본문·평가셋이 템플릿 그대로면 WARN입니다. 규칙 전체: [셀프 체크 규칙](validate.md).
 - 평가셋 `evals/questions.yaml`은 질문마다 `id`·`text`와 `expected`(정답으로 볼 답)나 `guideline`(판정 기준)을 한 줄씩 씁니다. 배포 전 평가(Gate)가 질문마다 에이전트의 지시·스킬을 받은 모델로 답하고 판정 모델로 채점해, 정확도가 SPEC 중요도별 기준(high 90%·medium 85%·low 80%) 이상이어야 통과합니다. 템플릿 질문만 있으면 반려됩니다.
 - 이 폴더에서 `claude`·`codex`를 직접 실행해도 같은 지시와 스킬을 씁니다. 다만 aops 세션 기록과 trace는 `aops run`일 때만 남습니다.
 - `aops run`(Claude)은 기본으로 이 폴더의 설정만 읽어서, 개발자 PC가 달라도 같은 에이전트가 같게 동작합니다. 개인 MCP 서버 등을 함께 쓰려면 `[agent] user_settings = true`로 켭니다. 회사 관리 설정(모델 경로 등)은 늘 적용됩니다.
@@ -42,6 +42,7 @@ name: my-agent
 build_type: skill
 owner:                         # 비우면 처음 등록한 사람
 owner_group:                   # 담당 팀. 팀원 누구나 새 버전 등록·배포 요청
+approvers:                     # 배포 요청을 승인할 사람: 이메일·group:<그룹>, 쉼표로. 있으면 이 승인자만 리포트를 보고 승인 (자동 승인 안 함)
 service_criticality: medium    # low | medium | high
 data_sensitivity: internal     # public | internal | confidential | personal
 security_level: general

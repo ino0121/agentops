@@ -31,7 +31,8 @@ def cmd_register(args: argparse.Namespace) -> int:
     project = _project()
     archive = package.build(project)
     _say(f"버전 zip: 파일 {len(archive.files)}개, {len(archive.data):,} bytes, 해시 {archive.sha256[:12]}")
-    row = Server(project).upload(f"/projects/{project.name}/registrations", {"version": args.version, "bump": args.bump},
+    row = Server(project).upload(f"/projects/{project.name}/registrations",
+                                 {"version": args.version, "bump": args.bump, "note": getattr(args, "note", None)},
                                  "archive", f"{project.name}.zip", archive.data)
     _say(f"등록: {project.name} {row['version']} (상태 {row['status']})")
     _say(f"  볼륨: {row['artifact_path']}")
@@ -75,9 +76,12 @@ def cmd_validate(args: argparse.Namespace) -> int:
         result = server.upload(f"/projects/{name}/validations", {"version": args.version})
         _say(f"셀프 체크: {name} ({result['source']} · 기록하지 않음, 배포 조건 아님)")
         steps = result["steps"]
-    _print_steps({"steps": steps})
+    _print_steps({"steps": steps}, rules=True)
     ok = all(step["status"] != "failed" for step in steps)
-    _say("  통과: 배포 전 평가는 aops evaluate (배포 요청 때도 자동으로 돈다)" if ok else "  고칠 곳이 있습니다")
+    rules = [r for s in steps for r in s.get("rules") or []]
+    counts = f"규칙 {len(rules)}개 중 통과 {sum(r['passed'] for r in rules)}"
+    _say(f"  통과 ({counts}): 배포 전 평가는 aops evaluate (배포 요청 때도 자동으로 돈다)" if ok
+         else f"  고칠 곳이 있습니다 ({counts}). ERROR는 배포 전 평가가 반려합니다. 규칙 설명: docs/validate.md")
     return 0 if ok else 1
 
 
@@ -88,13 +92,14 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     _say(f"평가 시작: {name} {run['version']} (evaluate Job, Gate)")
     run = _wait_evaluation(server, run["validation_run_id"])
     _print_steps(run)
+    print_review(run.get("review"))
     for result in run.get("results") or []:
         if result["assessment"] != "GOOD":
             _say(f"    {result['assessment']} {result['question_id']} {(result.get('question') or '')[:50]} · "
                  f"{'; '.join(str(x) for x in result.get('reasons') or [])[:120]}")
     if run.get("failure_reason") and run["status"] != "failed":
         _say(f"  {run['failure_reason']}")
-    _say(f"  평가 {run['status']}" + (": 같은 내용으로 배포를 요청하면 이 결과를 씁니다" if run["status"] == "passed" else ""))
+    _say(f"  평가 {run['status']}" + (": 같은 내용으로 배포를 요청하면 이 결과를 씁니다. 리포트는 승인자에게 갑니다" if run["status"] == "passed" else ""))
     return 0 if run["status"] == "passed" else 1
 
 
@@ -122,10 +127,41 @@ def _wait_evaluation(server: Server, run_id: str) -> dict[str, Any]:
         time.sleep(3)
 
 
-def _print_steps(run: dict[str, Any]) -> None:
+REVIEW_MARK = {"pass": "✓", "warn": "!", "fail": "✗", "na": "–", "unchecked": "?"}
+
+
+def print_review(report: dict[str, Any] | None, full: bool = False) -> None:
+    """The content review: verdict, summary, the checklist (and with `full`, every finding and the opinion)."""
+    if not report:
+        return
+    cov = report.get("coverage") or {}
+    prompts = ", ".join(f"{k} v{v}" for k, v in (report.get("prompts") or {}).items())
+    _say(f"  내용 검토: {report['verdict']} (권고 {report['recommendation']}) · 파일 {cov.get('files_read')}/{cov.get('text_files')} 읽음 · "
+         f"프롬프트 {prompts} · 모델 {report.get('model')}")
+    _say(f"    요약: {report.get('summary')}")
+    for item in report.get("items") or []:
+        if item["status"] in ("pass", "na") and not full:
+            continue
+        _say(f"    {REVIEW_MARK.get(item['status'], '?')} {item['id']}: {item.get('reason') or ''}"[:400])
+        for finding in (item.get("findings") or [])[: (10 if full else 2)]:
+            where = f"{finding['file']}:{finding['line']}" if finding.get("line") else finding["file"]
+            _say(f"        {where} {finding.get('issue') or ''}"[:300])
+    if full:
+        _say(f"    의견: {report.get('opinion')}")
+    passed = sum(1 for i in report.get("items") or [] if i["status"] in ("pass", "na"))
+    if not full and passed:
+        _say(f"    (통과 {passed}개 항목 생략 · 전체: aops gates <gate ID> 또는 console 배포 요청 화면)")
+
+
+def _print_steps(run: dict[str, Any], rules: bool = False) -> None:
+    """One line per step; with `rules`, the rules to fix under it (✗ ERROR, ! WARN) with where to fix them."""
     for step in run.get("steps") or []:
-        mark = {"passed": "✓", "skipped": "–"}.get(step["status"], "✗")
-        _say(f"  {mark} {step['name']}: {step.get('detail') or ''}")
+        mark = {"passed": "✓", "skipped": "–", "warned": "!"}.get(step["status"], "✗")
+        missed = [r for r in step.get("rules") or [] if not r.get("passed")]
+        _say(f"  {mark} {step['name']}: {step.get('detail') or ''}" if not (rules and missed) else f"  {mark} {step['name']}")
+        if rules:
+            for r in missed:
+                _say(f"      {'✗' if r.get('level') == 'ERROR' else '!'} {r['id']}: {r.get('message')} → {r.get('fix')}")
 
 
 def cmd_deploy(args: argparse.Namespace) -> int:
@@ -176,6 +212,15 @@ def _cancel(server: Server, agent_id: str) -> int:
 def cmd_gates(args: argparse.Namespace) -> int:
     here = Project.find()
     server = Server(here if here.is_project else None)
+    if args.gate_id:
+        gate = server.request("GET", f"/release-gates/{args.gate_id}")
+        _say(f"배포 요청 {gate['agent_id']} {gate['version']} (gate {gate['gate_id']}) · {gate['decision']} · 요청 {gate['requester']}")
+        if gate.get("evaluation"):
+            _print_steps(gate["evaluation"])
+            print_review(gate["evaluation"].get("review"), full=True)
+        else:
+            _say("  평가 리포트가 없습니다 (평가 면제이거나 아직 평가 중)")
+        return 0
     if args.mine:
         query = "?mine=true"
     elif args.agent:
@@ -196,8 +241,14 @@ def cmd_gates(args: argparse.Namespace) -> int:
 
 def cmd_approve(args: argparse.Namespace) -> int:
     here = Project.find()
-    gate = Server(here if here.is_project else None).request(
-        "POST", f"/release-gates/{args.gate_id}/approve", body={"comment": args.comment})
+    server = Server(here if here.is_project else None)
+    detail = server.request("GET", f"/release-gates/{args.gate_id}")
+    run = detail.get("evaluation") or {}
+    if run:  # what the approver approves: the report, shown before the approval is sent with its run id
+        _say(f"평가 리포트: {detail['agent_id']} {detail['version']} (평가 {run.get('status')}, validation_run_id {run['validation_run_id']})")
+        print_review(run.get("review"))
+    gate = server.request("POST", f"/release-gates/{args.gate_id}/approve",
+                          body={"comment": args.comment, "validation_run_id": run.get("validation_run_id")})
     state = "배포 Job 시작" if gate["decision"] == "approved" else f"승인 {gate['approvals']}/{gate['required_approvals']}"
     _say(f"승인: {gate['agent_id']} {gate['version']} (gate {gate['gate_id']}) → {state}")
     return 0
@@ -215,12 +266,14 @@ def _report_gate(gate: dict[str, Any]) -> None:
     decision, deployment = gate["decision"], gate.get("deployment_status")
     if decision == "validating":
         _say("  Gate: evaluate Job으로 평가 중…")
-    elif decision == "pending_approval" and gate.get("decision_reason"):
+    elif decision == "pending_approval":
         if gate.get("evaluation"):
             _print_steps(gate["evaluation"])
-        _say(f"  {gate['decision_reason']}")
-    elif decision == "pending_approval":
-        _say("  Gate 통과 → " + ("정책 자동 승인 중…" if gate["approval_mode"] == "auto" else "승인 대기"))
+            print_review(gate["evaluation"].get("review"))
+        if gate.get("decision_reason"):
+            _say(f"  {gate['decision_reason']}")
+        else:
+            _say("  Gate 통과 → " + ("정책 자동 승인 중…" if gate["approval_mode"] == "auto" else "승인 대기 (승인자가 리포트를 보고 승인)"))
     elif decision == "approved" and deployment == "running":
         if gate.get("evaluation"):
             _print_steps(gate["evaluation"])
@@ -286,6 +339,7 @@ def add_commands(sub: argparse._SubParsersAction) -> dict[str, Any]:
     p = sub.add_parser("register", help="버전 저장 (dbx)")
     p.add_argument("--version")
     p.add_argument("--bump", choices=["fix", "minor", "major"])
+    p.add_argument("--note", "-m", help="등록 사유 (선택): 버전에 남고 Git 커밋 메시지의 제목이 된다")
     p = sub.add_parser("validate", help="셀프 체크: 형식 검사 (언제든, 기록 안 함, 배포 조건 아님)")
     p.add_argument("--agent", help="서버가 이 에이전트를 점검 (노코드: 개발용 Genie, 그 밖: 등록 버전). 없으면 이 폴더를 바로 점검")
     p.add_argument("--version", help="--agent와 함께: 점검할 등록 버전 (비우면 마지막)")
@@ -297,10 +351,11 @@ def add_commands(sub: argparse._SubParsersAction) -> dict[str, Any]:
     p.add_argument("--version")
     p.add_argument("--reason")
     p.add_argument("--cancel", action="store_true", help="진행 중인 배포 요청 취소 (요청자·담당 팀)")
-    p = sub.add_parser("gates", help="배포 요청 목록 (기본: 내가 승인할 차례인 것)")
+    p = sub.add_parser("gates", help="배포 요청 목록 (기본: 내가 승인할 차례인 것). gate ID를 주면 그 요청의 평가 리포트")
+    p.add_argument("gate_id", nargs="?", help="이 배포 요청의 평가 리포트(체크리스트·근거·의견)를 본다")
     p.add_argument("--mine", action="store_true", help="내가 낸 요청")
     p.add_argument("--agent", help="이 에이전트의 요청")
-    p = sub.add_parser("approve", help="배포 요청 승인 (승인 그룹, 요청자 본인 불가)")
+    p = sub.add_parser("approve", help="배포 요청 승인 (지정 승인자·승인 그룹, 요청자 본인 불가). 평가 리포트 요약을 보여 준 뒤 승인")
     p.add_argument("gate_id")
     p.add_argument("--comment")
     p = sub.add_parser("reject", help="배포 요청 반려 (승인 그룹, 요청자 본인 불가)")

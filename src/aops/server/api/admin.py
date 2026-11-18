@@ -65,6 +65,9 @@ class PolicyChange(BaseModel):
     validation_mode: Literal["mandatory", "optional", "exempt"] | None = None
     approval_mode: Literal["required", "optional", "auto"] | None = None
     approver_group: str | None = None
+    approvers_required: bool | None = Field(None, description="true: 에이전트마다 SPEC.md approvers(지정 승인자)가 있어야 한다 (없으면 셀프 체크·평가 ERROR)")
+    dev_approvers: list[str] | None = Field(None, examples=[["dev@example.com"]],
+                                            description="개발용 예외: 이 사람들은 본인 요청을 포함해 어떤 요청이든 승인할 수 있다. 승인마다 예외로 기록된다. 운영에서는 비운다")
 
 
 class PolicySet(BaseModel):
@@ -127,6 +130,62 @@ def _policy(row: dict) -> PolicyVersion:
 @router.get("/policies/diff", summary="정책 버전 비교", **command("aops admin policy diff", DBX))
 def diff_policy(from_version: int, to_version: int | None = None) -> PolicyDiff:
     raise todo("aops admin policy diff")
+
+
+PromptKind = Literal["common", "skill", "code", "no_code"]
+
+
+class ChecklistItem(BaseModel):
+    id: str = Field(examples=["internal_info"])
+    title: str = Field(examples=["사내 정보(임직원 신상, 내부 호스트·URL, 고객·거래처·영업 정보, 비공개 계획)가 들어 있지 않다"])
+
+
+class ReviewPrompt(BaseModel):
+    kind: PromptKind = Field(description="common(모든 에이전트) · skill · code · no_code")
+    version: int = Field(examples=[1], description="0이면 aops에 든 기본 프롬프트 (아직 바꾼 적 없음)")
+    body: str = Field(description="Markdown. '## 체크리스트' 아래 '- <id>: <통과 조건>' 줄이 리포트 항목")
+    note: str | None = None
+    created_by: str
+    created_at: datetime | None = None
+    checklist: list[ChecklistItem] = Field(default_factory=list)
+
+
+class ReviewPromptRow(BaseModel):
+    kind: PromptKind
+    prompt_version: int
+    status: Literal["active", "retired"]
+    note: str | None = None
+    created_by: str
+    created_at: datetime
+
+
+class ReviewPrompts(BaseModel):
+    active: dict[PromptKind, ReviewPrompt] = Field(description="지금 평가가 쓰는 프롬프트 (종류별)")
+    history: list[ReviewPromptRow] = Field(default_factory=list, description="올린 버전들 (최신 먼저)")
+
+
+class ReviewPromptChange(BaseModel):
+    kind: PromptKind
+    body: str
+    note: str | None = Field(None, examples=["사내 프로젝트 코드명 목록을 사내 정보에 더함"])
+
+
+_PROMPTS_NOTE = ("배포 전 평가(Gate)의 내용 검토 프롬프트 4개(공통·스킬·코드·노코드). 평가 Job의 모델이 도구로 에이전트의 모든 파일을 읽고 "
+                 "공통 + 종류별 프롬프트의 체크리스트를 판정해 승인자용 리포트를 쓴다. 바꾸면 그 종류의 새 버전이 생기고 평가 기록에 쓴 버전이 남는다.")
+
+
+@router.get("/review-prompts", summary="평가 프롬프트 (내용 검토)", **command(None, DBX, screen="console 정책 → 평가 프롬프트", note=_PROMPTS_NOTE))
+def list_review_prompts(request: Request) -> ReviewPrompts:
+    svc = service_for(None)
+    caller_of(request, svc)
+    return ReviewPrompts(**svc.review_prompts())
+
+
+@router.post("/review-prompts", status_code=201, summary="평가 프롬프트 새 버전", **command(
+    None, DBX, screen="console 정책 → 평가 프롬프트", note=_PROMPTS_NOTE + " 워크스페이스 관리자만. 체크리스트가 없거나 항목 ID가 겹치면 400."))
+def set_review_prompt(body: ReviewPromptChange, request: Request) -> ReviewPrompt:
+    svc = service_for(None)
+    return ReviewPrompt(**svc.set_review_prompt(caller_of(request, svc), body.kind, body.body, body.note))
 
 
 @router.get("/rate-cards", summary="모델 단가표", **command(None, DBX, screen="console 관리자 · 단가표"))

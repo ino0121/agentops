@@ -18,6 +18,19 @@ CREATE TABLE IF NOT EXISTS __SCHEMA__.policies (
 COMMENT '관리자 정책(배포 형식). aops admin policy가 새 버전을 추가하고, aops 서버·validate·배포 Job이 active 정책을 읽는다'
 TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
+CREATE TABLE IF NOT EXISTS __SCHEMA__.review_prompts (
+  kind STRING NOT NULL COMMENT '프롬프트 종류. common(모든 에이전트) | skill | code | no_code',
+  prompt_version INT NOT NULL COMMENT '종류별 버전. 1부터 1씩 늘어난다 (행이 없으면 aops에 든 기본 프롬프트가 버전 0)',
+  status STRING NOT NULL COMMENT 'active(지금 씀, 종류마다 하나) | retired(이전 버전)',
+  body STRING NOT NULL COMMENT '프롬프트 본문 (Markdown). ## 체크리스트 아래 - <id>: <통과 조건> 줄이 리포트 항목이 된다',
+  note STRING COMMENT '바꾼 이유',
+  created_by STRING NOT NULL COMMENT '올린 관리자',
+  created_at TIMESTAMP NOT NULL COMMENT '올린 시각 (UTC)',
+  CONSTRAINT review_prompts_pk PRIMARY KEY (kind, prompt_version)
+)
+COMMENT '배포 전 평가(Gate)의 내용 검토 프롬프트. 관리자가 console 정책 화면에서 고치면 새 버전이 생기고, 평가 기록에 쓴 버전이 남는다'
+TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
+
 CREATE TABLE IF NOT EXISTS __SCHEMA__.agents (
   agent_id STRING NOT NULL COMMENT '에이전트 ID. 소문자·숫자·하이픈 (SPEC agent_id)',
   name STRING NOT NULL COMMENT '표시 이름',
@@ -64,6 +77,7 @@ CREATE TABLE IF NOT EXISTS __SCHEMA__.agent_versions (
   spec VARIANT COMMENT '이 버전의 SPEC.md 항목',
   registered_by STRING NOT NULL COMMENT '등록한 사람',
   registered_at TIMESTAMP NOT NULL COMMENT '등록한 시각 (UTC)',
+  note STRING COMMENT '등록 사유 (선택, 등록할 때 적음). Git 커밋 메시지의 제목에도 들어간다',
   CONSTRAINT agent_versions_pk PRIMARY KEY (agent_id, version)
 )
 COMMENT '저장된 버전. 등록된 버전의 내용은 바꾸지 않는다 (zip은 한 번만 쓴다)'
@@ -91,7 +105,7 @@ CREATE TABLE IF NOT EXISTS __SCHEMA__.validation_runs (
   mode STRING NOT NULL COMMENT 'job(조직 검사, 배포 근거) | local(참고용)',
   status STRING NOT NULL COMMENT 'queued | running | passed | failed | stale(점검 중 정의가 바뀜) | error',
   steps VARIANT COMMENT '단계별 결과 [{name, status, detail}]',
-  checks VARIANT COMMENT '판정 근거 (규칙별 결과, 점수 등)',
+  checks VARIANT COMMENT '판정 근거: review(내용 검토 리포트: 항목별 판정·근거·의견, 읽은 파일, 프롬프트 버전, 모델) 등',
   failure_reason STRING COMMENT '실패·오류 사유',
   job_run_id BIGINT COMMENT 'validate Job 실행 ID',
   started_by STRING NOT NULL COMMENT '검사를 요청한 사람',
@@ -99,7 +113,7 @@ CREATE TABLE IF NOT EXISTS __SCHEMA__.validation_runs (
   ended_at TIMESTAMP COMMENT '끝난 시각 (UTC)',
   CONSTRAINT validation_runs_pk PRIMARY KEY (validation_run_id)
 )
-COMMENT '배포 전 평가(Gate, aops evaluate) 실행: 형식 검사와 품질 평가. 배포 요청이 같은 내용·정책의 passed 행을 요구한다. 셀프 체크(aops validate)는 남기지 않는다'
+COMMENT '배포 전 평가(Gate, aops evaluate) 실행: 형식 검사(셀프 체크 규칙), 내용 검토(agentic), 품질 평가. 승인자가 보는 리포트가 checks에 남는다. 배포 요청이 같은 내용·정책의 passed 행을 요구한다. 셀프 체크(aops validate)는 남기지 않는다'
 TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
 CREATE TABLE IF NOT EXISTS __SCHEMA__.eval_results (
@@ -225,9 +239,16 @@ CREATE TABLE IF NOT EXISTS __SCHEMA__.rate_cards (
 COMMENT '모델별 단가 이력. 추정 비용(trace 토큰 × 단가)에 쓴다'
 TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 
+-- 나중에 더한 칸: 이전에 만든 테이블에 붙인다. 이미 있으면 aops admin setup이 건너뛴다 (FIELD_ALREADY_EXISTS)
+ALTER TABLE __SCHEMA__.agent_versions ADD COLUMNS (note STRING COMMENT '등록 사유 (선택, 등록할 때 적음). Git 커밋 메시지의 제목에도 들어간다');
+
 -- 허용 값 (CHECK). 테이블을 만든 뒤 붙인다 (CREATE TABLE 안에는 쓸 수 없다)
 ALTER TABLE __SCHEMA__.policies DROP CONSTRAINT IF EXISTS policies_status;
 ALTER TABLE __SCHEMA__.policies ADD CONSTRAINT policies_status CHECK (status IN ('active', 'retired'));
+ALTER TABLE __SCHEMA__.review_prompts DROP CONSTRAINT IF EXISTS review_prompts_kind;
+ALTER TABLE __SCHEMA__.review_prompts ADD CONSTRAINT review_prompts_kind CHECK (kind IN ('common', 'skill', 'code', 'no_code'));
+ALTER TABLE __SCHEMA__.review_prompts DROP CONSTRAINT IF EXISTS review_prompts_status;
+ALTER TABLE __SCHEMA__.review_prompts ADD CONSTRAINT review_prompts_status CHECK (status IN ('active', 'retired'));
 ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_build_type;
 ALTER TABLE __SCHEMA__.agents ADD CONSTRAINT agents_build_type CHECK (build_type IN ('skill', 'code', 'no_code'));
 ALTER TABLE __SCHEMA__.agents DROP CONSTRAINT IF EXISTS agents_criticality;
@@ -274,6 +295,7 @@ SELECT
   (SELECT max_by(v.version, v.registered_at) FROM __SCHEMA__.agent_versions v WHERE v.agent_id = a.agent_id) AS latest_version,
   p.current_version AS production_version,
   (SELECT max_by(r.status, r.started_at) FROM __SCHEMA__.validation_runs r WHERE r.agent_id = a.agent_id) AS last_validation,
+  (SELECT max_by(r.checks:review:verdict::string, r.started_at) FROM __SCHEMA__.validation_runs r WHERE r.agent_id = a.agent_id) AS last_review,
   (SELECT count(*) FROM __SCHEMA__.release_gates g WHERE g.agent_id = a.agent_id AND g.decision IN ('validating', 'pending_approval')) AS pending_gates,
   a.updated_at
 FROM __SCHEMA__.agents a

@@ -95,6 +95,8 @@ def test_production_branch_is_made_then_moved():
 def test_commit_message_carries_the_aops_record():
     message = commit_message("a", {"version": "1.1.0", "source_sha256": "abc", "registered_by": "dev@x.com"})
     assert message.startswith("a 1.1.0\n\n") and "Aops-Sha256: abc" in message and "Aops-Registered-By: dev@x.com" in message
+    noted = commit_message("a", {"version": "1.1.1", "note": "사내 주소 제거\n고객 예시도 가짜로", "source_sha256": "abc"})
+    assert noted.startswith("a 1.1.1: 사내 주소 제거\n\n고객 예시도 가짜로\n\nAops-Version: 1.1.1")
 
 
 # ── service: register and deploy keep going whatever Git does ────────────────

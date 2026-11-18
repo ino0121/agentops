@@ -10,7 +10,7 @@ SPEC = b"---\nagent_id: price-bot\nname: price-bot\nbuild_type: code\nservice_cr
 
 
 def project(**extra):
-    return {"SPEC.md": SPEC, "aops.toml": b'[project]\nname = "price-bot"\n', "agent.toml": AGENT_TOML,
+    return {"SPEC.md": SPEC, "aops.toml": b'[project]\nname = "price-bot"\ntype = "code"\n', "agent.toml": AGENT_TOML,
             "app.yaml": b'command: ["uv", "run", "start-server"]\n', "pyproject.toml": b"[project]\nname = \"x\"\n", **extra}
 
 
@@ -18,7 +18,7 @@ def test_a_code_agent_is_checked_as_an_agent_bricks_project():
     from aops.dbx.service import check_agent
 
     steps = {s["name"]: s for s in check_agent(project())}
-    assert set(steps) == {"format", "project", "secrets"}  # no skills step for code
+    assert list(steps) == ["format", "config", "project", "secrets"]  # no skills step for code
     assert steps["project"]["status"] == "passed" and "uv.lock" in steps["project"]["detail"]
     custom = project(**{"agent.toml": b'[agent]\nframework = "openai"\nserver = "custom"\n'})
     assert {s["name"]: s for s in check_agent(custom)}["project"]["status"] == "failed"
@@ -47,13 +47,20 @@ def test_app_names_fit_the_agentbricks_limit():
 def test_init_code_adds_aops_files_to_the_agent_bricks_template(tmp_path):
     from aops import init
 
-    fake = tmp_path / "agentbricks"  # stands in for `agentbricks init <dir> --framework openai`
-    fake.write_text('#!/bin/sh\nmkdir -p "$2"\nprintf \'[agent]\\nframework = "openai"\\n\' > "$2/agent.toml"\ntouch "$2/app.yaml"\necho "# t" > "$2/README.md"\n')
+    fake = tmp_path / "agentbricks"  # stands in for `agentbricks init <dir> --framework <framework>`
+    fake.write_text('#!/bin/sh\nmkdir -p "$2"\nprintf \'[agent]\\nframework = "%s"\\n\' "$4" > "$2/agent.toml"\ntouch "$2/app.yaml"\necho "# t" > "$2/README.md"\n')
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     project_ = init.create_code(tmp_path, "price-bot", agentbricks=str(fake))
     spec = (project_.root / "SPEC.md").read_text()
     assert "build_type: code" in spec and "[project]" in (project_.root / "aops.toml").read_text()
     assert "aops deploy" in (project_.root / "README.md").read_text()
+    assert tomllib.loads((project_.root / "agent.toml").read_text())["agent"]["framework"] == "langgraph"  # the agentbricks default
+    other = init.create_code(tmp_path, "price-bot-2", framework="openai", agentbricks=str(fake))
+    assert tomllib.loads((other.root / "agent.toml").read_text())["agent"]["framework"] == "openai"
+    import pytest
+
+    with pytest.raises(ValueError):
+        init.create_code(tmp_path, "price-bot-3", framework="crewai", agentbricks=str(fake))
 
 
 def test_a_code_deploy_cut_by_a_restart_is_marked_failed():

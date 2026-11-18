@@ -40,6 +40,17 @@ def ddl() -> str:
     return resources.files("aops.dbx").joinpath("tables.sql").read_text(encoding="utf-8")
 
 
+def run_ddl(sql: Any, stmts: list[str]) -> None:
+    """Run the registry DDL. A column added later (`ALTER TABLE … ADD COLUMNS`) is skipped when it is there already."""
+    for stmt in stmts:
+        try:
+            sql.run(stmt)
+        except Exception as error:
+            if "ADD COLUMNS" in stmt.upper() and "FIELD_ALREADY_EXISTS" in str(error):
+                continue
+            raise
+
+
 def statements(sql: str) -> list[str]:
     body = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
     return [part.strip().rstrip(";") for part in body.split(";\n") if part.strip().rstrip(";").strip()]
@@ -56,6 +67,8 @@ def add_command(sub: argparse._SubParsersAction) -> None:
     setup.add_argument("--approval-mode", choices=["required", "optional", "auto"], default="required")
     setup.add_argument("--validation-mode", choices=["mandatory", "optional", "exempt"], default="mandatory")
     setup.add_argument("--approver-group", default="")
+    setup.add_argument("--dev-approver", action="append", default=None,
+                       help="개발용 예외 승인자(본인 요청도 승인, 승인마다 예외로 기록). 여러 번. 주지 않으면 지금 정책 값을 그대로 둔다")
     setup.add_argument("--git-connection", help="Git 사본: GitHub API(https://api.github.com)로 가는 UC HTTP 연결 이름. "
                        "git 옵션이 없으면 지금 정책의 git 설정을 그대로 둔다")
     setup.add_argument("--git-owner", help="Git 사본: 에이전트 저장소를 둘 GitHub 조직")
@@ -85,8 +98,7 @@ def cmd_admin(args: argparse.Namespace) -> int:
         stmts = statements(ddl().replace("__SCHEMA__", args.registry))
         print(f"\n[tables] 레지스트리 테이블·뷰: 문 {len(stmts)}개 (IF NOT EXISTS, 다시 실행해도 됨)")
         if args.apply:
-            for stmt in stmts:
-                sql.run(stmt)
+            run_ddl(sql, stmts)
             print("  ok")
 
     current = _active_policy(sql) if ("policy" in steps or "grants" in steps) else None
@@ -253,6 +265,11 @@ def policy_body(args: argparse.Namespace, current: dict[str, Any] | None) -> dic
     body: dict[str, Any] = {
         "validation_mode": args.validation_mode, "approval_mode": args.approval_mode, "approval_channel": "console",
         "approver_group": args.approver_group, "required_approvals": 1, "security_levels": ["general", "important", "secret"]}
+    for key in ("approvers_required", "dev_approvers", "review", "evaluate", "no_code"):  # set on the console: kept
+        if key in (current or {}):
+            body[key] = current[key]
+    if getattr(args, "dev_approver", None) is not None:
+        body["dev_approvers"] = [a.strip() for a in args.dev_approver if a.strip()]
     git = (current or {}).get("git")
     if getattr(args, "no_git", False):
         git = None
@@ -340,7 +357,10 @@ def _deploy_app(w: Any, args: argparse.Namespace, wheel_path: str | None, me: st
 # Who the requester is and their groups (so the console in a browser knows owners, approvers and admins like
 # the CLI does) come with the default scopes every app gets (iam.current-user:read, iam.access-control:read);
 # they cannot be set and are not listed here.
-USER_SCOPES = ("files", "genie", "workspace.workspace")
+# What the server does with the requester's own token: workspace folders (skill·code agents), Genie spaces (no-code),
+# and the lists of the new-agent screen (Unity Catalog tables they may SELECT, SQL warehouses), read-only.
+USER_SCOPES = ("files", "genie", "workspace.workspace", "catalog.catalogs:read", "catalog.schemas:read", "catalog.tables:read",
+               "sql:read")
 IDENTITY_SCOPES = ("iam.current-user:read",)
 
 
@@ -370,6 +390,7 @@ def _ensure_user_scopes(w: Any, app: Any) -> None:
     failed = [f"{s} ({errors.get(s, '앱 설정에 반영되지 않음')})" for s in wanted if s not in current]
     if added:
         print(f"  사용자 권한 범위: {', '.join(sorted(current))} (더함: {', '.join(added)})")
+        print("  범위를 더하기 전에 열어 둔 화면은 예전 토큰을 씁니다: 시크릿 창으로 열거나 앱 주소의 쿠키를 지운 뒤 다시 열어 동의하세요")
     if failed:
         print(f"  aops: 앱 사용자 권한 범위를 더하지 못했습니다: {'; '.join(failed)}. 앱 설정 → User authorization에서 더하거나, "
               "워크스페이스 설정 → Development → Apps의 허용 범위를 확인하세요")

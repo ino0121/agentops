@@ -12,7 +12,7 @@ Databricks 위에서 AI 에이전트를 개발부터 운영까지 관리하는 �
 - **세션 이어가기:** 하네스를 바꿔도 대화와 메모리가 이어집니다.
 - **구성별 비교:** 같은 질문을 하네스·모델·가드레일 구성별로 돌려 나란히 비교합니다.
 - **평가·가드레일 시험:** MLflow로 채점하고, 레드팀 사례로 가드레일을 시험합니다.
-- **평가 후 배포:** 만드는 중에는 셀프 체크(`aops validate`)로 형식을 언제든 보고, 배포 요청 때 평가 Gate(`aops evaluate`: 형식 + 품질)를 통과하고 승인된 버전만 배포합니다.
+- **평가 후 배포:** 만드는 중에는 셀프 체크(`aops validate`)로 템플릿 구성을 언제든 보고, 배포 요청 때 평가 Gate(`aops evaluate`: 형식 → 내용 검토 리포트 → 품질)를 거쳐 지정 승인자가 리포트를 보고 승인한 버전만 배포합니다.
 - **찾기·가져오기:** 등록된 에이전트를 목록에서 찾고, 권한을 받은 사람은 가져와 씁니다.
 - **운영 모니터링:** 사용량·비용과 실행 중인 에이전트를 한 화면에서 봅니다.
 - **console 화면:** aops 서버 주소를 브라우저로 열면 만들기·셀프 체크·등록·평가·배포·승인·권한·정책을 화면에서 합니다 ([console](docs/console.md)).
@@ -34,9 +34,9 @@ Databricks 위에서 AI 에이전트를 개발부터 운영까지 관리하는 �
 | 실행 | `aops run "<질문>"` | 내 PC (Claude Code·Codex) | MLflow trace (도구·스킬, 토큰·비용) |
 | 하네스 바꾸기 | `aops session switch --harness codex` | 내 PC | 없음 (앞 대화를 넘겨 이어 감) |
 | 등록 | `aops register` | aops 서버 | UC Volume(버전 zip), 레지스트리 Delta 테이블 |
-| 셀프 체크 | `aops validate` | 내 PC (서버 없이) | 없음 (형식 검사, 기록 안 함) |
-| 평가·승인·배포 | `aops deploy` (평가만: `aops evaluate`, 취소: `aops deploy --cancel`) | aops 서버 | Lakeflow Jobs (서버리스, 서비스 주체), 모델 서빙(평가 답변·판정), UC Skill (첫 배포 때 생성) |
-| 승인 (승인자) | `aops gates` · `aops approve <gate>` · `aops reject <gate> --reason <이유>` | aops 서버 | 레지스트리 (`approvals`, 감사 이력) |
+| 셀프 체크 | `aops validate` | 내 PC (서버 없이) | 없음 (템플릿 구성 체크리스트, 기록 안 함) |
+| 평가·승인·배포 | `aops deploy` (평가만: `aops evaluate`, 취소: `aops deploy --cancel`) | aops 서버 | Lakeflow Jobs (서버리스, 서비스 주체), 모델 서빙(내용 검토·평가 답변·판정), UC Skill (첫 배포 때 생성) |
+| 승인 (승인자) | `aops gates [<gate>]`(리포트) · `aops approve <gate>` · `aops reject <gate> --reason <이유>` | aops 서버 | 레지스트리 (`approvals`, 감사 이력) |
 | 목록 | `aops list` | aops 서버 | 레지스트리 |
 | 권한 | `aops promote my-agent --to group:<계정 그룹>` | aops 서버 | UC Skill 권한 (`READ_VOLUME`) |
 | 가져오기 | `aops load my-agent` | aops 서버 → 내 PC | 요청한 사람의 권한 확인, 해시 확인 |

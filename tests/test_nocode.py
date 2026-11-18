@@ -47,7 +47,7 @@ def test_bundle_hash_is_stable_and_steps_cover_the_snapshot():
     assert package.files_sha256(list(files.items())) == package.files_sha256(list(nocode.bundle("sales", SPEC, DEFINITION).items()))
     from aops.dbx.service import spec_step
 
-    steps = nocode.check_steps(files, DEFAULT_POLICY, spec_step(files, "no_code"))
+    steps = nocode.check_steps(files, DEFAULT_POLICY)
     assert [s["name"] for s in steps] == ["format", "definition", "secrets"]
     assert steps[0]["status"] == "passed" and steps[1]["status"] == "failed"  # no examples, no benchmarks yet
     assert any(r["id"] == "examples.count" and not r["passed"] for r in steps[1]["rules"])

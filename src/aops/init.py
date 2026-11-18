@@ -45,6 +45,7 @@ name: {name}
 build_type: skill
 owner:
 owner_group:
+approvers:                     # 배포 요청을 승인할 사람: 이메일이나 group:<그룹>, 쉼표로 (담당자 말고 한 명 이상)
 service_criticality: medium    # low | medium | high
 data_sensitivity: internal     # public | internal | confidential | personal
 security_level: general
@@ -56,10 +57,11 @@ description: {spec_description}
 이 에이전트가 하는 일, 쓰는 사람, 주의할 점을 적습니다.
 """
 
-SPEC_KEYS = ("agent_id", "name", "build_type", "owner", "owner_group", "service_criticality", "data_sensitivity",
+SPEC_KEYS = ("agent_id", "name", "build_type", "owner", "owner_group", "approvers", "service_criticality", "data_sensitivity",
              "security_level", "consumer_group", "description")
 SPEC_HINTS = {"service_criticality": "low | medium | high", "data_sensitivity": "public | internal | confidential | personal",
-              "consumer_group": "공개 그룹 (노코드: 배포 때 운영 Genie에 CAN RUN)"}
+              "consumer_group": "공개 그룹 (노코드: 배포 때 운영 Genie에 CAN RUN)",
+              "approvers": "배포 요청을 승인할 사람: 이메일이나 group:<그룹>, 쉼표로"}
 
 
 def render_spec(values: dict[str, str | None], body: str | None = None) -> str:
@@ -68,7 +70,10 @@ def render_spec(values: dict[str, str | None], body: str | None = None) -> str:
     for key in SPEC_KEYS:
         if key == "consumer_group" and values.get("build_type") != "no_code" and not values.get(key):
             continue
-        value = " ".join(str(values.get(key) or "").split()).replace(" #", " ＃")  # " #" would start a comment
+        raw = values.get(key)
+        if isinstance(raw, (list, tuple)):
+            raw = ", ".join(str(x) for x in raw if x)
+        value = " ".join(str(raw or "").split()).replace(" #", " ＃")  # " #" would start a comment
         hint = SPEC_HINTS.get(key)
         lines.append(f"{key}: {value}" + (f"    # {hint}" if hint else ""))
     name = values.get("name") or values.get("agent_id") or ""
@@ -190,19 +195,26 @@ aops deploy                            # 검사 → 승인 → aops 서버가 �
 """
 
 
-def create_code(parent: Path, name: str, *, framework: str = "openai", agentbricks: str = "agentbricks") -> Project:
-    """A code-based agent: `agentbricks init` (the Agent Bricks template) plus aops.toml and SPEC.md."""
+def create_code(parent: Path, name: str, *, framework: str = "langgraph", agentbricks: str = "agentbricks",
+                approvers: list[str] | None = None) -> Project:
+    """A code-based agent: `agentbricks init` (the Agent Bricks template) plus aops.toml and SPEC.md.
+
+    `framework` is the Agent Bricks one: langgraph (LangGraph, the agentbricks default) or openai (OpenAI Agents SDK).
+    """
     import os
     import subprocess
 
     if not NAME.match(name):
         raise ValueError("name must be lowercase letters, digits and hyphens (up to 63 characters)")
+    if framework not in FRAMEWORKS:
+        raise ValueError(f"framework must be one of {', '.join(FRAMEWORKS)}")
     root = parent / name
     env = {**os.environ, "AGENTBRICKS_DISABLE_TELEMETRY": "1", "AGENTBRICKS_DISABLE_AGENT_HINT": "1"}
     done = subprocess.run([agentbricks, "init", str(root), "--framework", framework], capture_output=True, text=True, env=env)
     if done.returncode != 0 or not (root / "agent.toml").exists():
         raise RuntimeError(f"agentbricks init 실패: {(done.stderr or done.stdout)[-400:]}")
     spec = SPEC_MD.format(name=name, spec_description=SPEC_DESCRIPTION).replace("build_type: skill", "build_type: code")
+    spec = spec.replace("approvers:  ", f"approvers: {approvers_line(approvers)}  ", 1)
     (root / CONFIG_FILE).write_text(CODE_TOML.format(name=name) + DBX_TOML, encoding="utf-8")
     (root / "SPEC.md").write_text(spec, encoding="utf-8")
     readme = root / "README.md"
@@ -210,7 +222,14 @@ def create_code(parent: Path, name: str, *, framework: str = "openai", agentbric
     return Project.load(root)
 
 
-def create(parent: Path, name: str, *, harness: str = "claude", edition: str = "local") -> Project:
+FRAMEWORKS = ("langgraph", "openai")  # agentbricks init --framework (the first is its default)
+
+
+def approvers_line(approvers: list[str] | None) -> str:
+    return ", ".join(a.strip() for a in approvers or [] if a and a.strip())
+
+
+def create(parent: Path, name: str, *, harness: str = "claude", edition: str = "local", approvers: list[str] | None = None) -> Project:
     if not NAME.match(name):
         raise ValueError("name must be lowercase letters, digits and hyphens (up to 63 characters)")
     root = parent / name
@@ -219,7 +238,7 @@ def create(parent: Path, name: str, *, harness: str = "claude", edition: str = "
     files = {
         "README.md": README_MD.format(name=name, dbx_usage=DBX_USAGE if edition != "local" else ""),
         CONFIG_FILE: AOPS_TOML.format(name=name, harness=harness, edition=edition) + (DBX_TOML if edition != "local" else ""),
-        "SPEC.md": SPEC_MD.format(name=name, spec_description=SPEC_DESCRIPTION),
+        "SPEC.md": SPEC_MD.format(name=name, spec_description=SPEC_DESCRIPTION).replace("approvers:  ", f"approvers: {approvers_line(approvers)}  ", 1),
         "agent/instructions.md": INSTRUCTIONS_MD.format(name=name),
         f"agent/skills/{TEMPLATE_SKILL}/SKILL.md": SKILL_MD.format(skill_description=SKILL_DESCRIPTION),
         "evals/questions.yaml": QUESTIONS_YAML,

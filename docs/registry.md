@@ -15,10 +15,11 @@
 | 실행 구성 | 에이전트 서버 종류, 허용 하네스·SDK 버전 범위, 허용 Model service·MCP, 도구 권한 방식 | evaluate |
 | 가드레일 | 데이터 등급별 필수 층·규칙·Gateway 정책, 레드팀 최소 통과율 | evaluate, 배포 Job |
 | 평가 | 평가셋, 중요도별 최소 정확도(`evaluate.accuracy_min`), 답변·판정 모델, 회귀 허용 수 | evaluate |
+| 내용 검토 | 검토 모델(`review.model`)과 호출 한도. 검토 기준·체크리스트는 `review_prompts`(공통·종류별 프롬프트, 버전) | evaluate |
 | 노코드 | Genie 정의 작성 규칙과 수준(오류·경고), 서비스 중요도별 벤치마크 정확도 기준 | evaluate |
 | 운영 기록 | 배포 에이전트의 MLflow tracing·Apps telemetry | 배포 Job |
 | 평가 방식 (`validation_mode`) | `mandatory`(기본, 통과한 평가 필요)·`optional`(평가는 돌리고, 실패해도 결과를 남긴 채 승인자가 판단)·`exempt`(평가 없음) | deploy |
-| 승인 | 승인 그룹, 필요한 승인 수, 자기 승인 금지, 승인 방식(`required` 기본·`optional`(SPEC 중요도 `low`이고 민감도 `public`·`internal`이면 자동, 아니면 승인자)·`auto`), 결재 채널(console 기본·외부 결재 확장) | deploy, console 화면 |
+| 승인 | 지정 승인자 필수 여부(`approvers_required`), 개발용 예외 승인자(`dev_approvers`: 본인 요청도 승인, 예외로 기록, 운영에서는 비움), 승인 그룹(지정 승인자가 없을 때), 필요한 승인 수, 자기 승인 금지, 승인 방식(`required` 기본·`optional`(SPEC 중요도 `low`이고 민감도 `public`·`internal`이면 자동, 아니면 승인자)·`auto`), 결재 채널(console 기본·외부 결재 확장). 에이전트의 SPEC.md `approvers`가 있으면 그 승인자만 승인하고 자동 승인하지 않음 | deploy, console 화면 |
 | 보안 등급 | 등급 목록, 등급별 공개 범위 | evaluate, promote |
 | 재검증 | 정책이 바뀌면 이전 정책의 평가로 배포할 수 있는지 | deploy |
 
@@ -26,7 +27,7 @@
 - 정책을 올리는 명령은 `aops admin policy set`입니다(설계).
 - **지금:**
   - 정책은 `aops admin setup --validation-mode mandatory|optional|exempt --approval-mode required|optional|auto --approver-group <그룹>`으로 정합니다. 승인 수는 1명, 보안 등급은 `general`·`important`·`secret`입니다. 정책이 없으면 `mandatory`·`required`를 씁니다. 세 가지 평가 방식과 세 가지 승인 방식이 모두 위 표의 뜻대로 동작합니다.
-  - 평가(Gate) 단계: 형식(`format`, 스킬 `skills`·코드 `project`·노코드 `definition`, `secrets`) → 품질 `evaluate`(스킬 평가셋 채점·노코드 벤치마크와 회귀, 코드는 다음 단계) → 노코드 `integrity` → `record`. `init` 템플릿을 고치지 않은 채면 반려합니다. 셀프 체크(`aops validate`)는 형식 단계만 바로 돌리고 기록하지 않습니다. 단계 설명은 [명령어](commands.md#aops-evaluate)
+  - 평가(Gate) 단계: 형식([셀프 체크 규칙](validate.md): 스킬 `format`·`config`·`instructions`·`skills`·`evals`, 코드 `format`·`config`·`project`, 노코드 `format`·`definition`, 모두 `secrets`) → 내용 검토 `review`(모델이 모든 파일을 읽고 프롬프트 체크리스트로 리포트) → 품질 `evaluate`(스킬 평가셋 채점·노코드 벤치마크와 회귀, 코드는 다음 단계) → 노코드 `integrity` → `record`. 형식의 ERROR, `integrity`, `record`가 실패하면 반려합니다. `review`·`evaluate`의 부적합·기준 미달은 반려하지 않고 승인자가 리포트를 보고 판단합니다(자동 승인하지 않음). 셀프 체크(`aops validate`)는 형식 단계만 바로 돌리고 기록하지 않습니다. 단계 설명은 [명령어](commands.md#aops-evaluate)
   - 가드레일·호환 검사, 보안 등급별 공개 범위, 재검증 규칙은 설계입니다.
 
 ## aops 서버
@@ -69,11 +70,12 @@
 | 테이블 | 내용 | 쓰는 곳 |
 | --- | --- | --- |
 | `policies` | 관리자 정책과 버전 | `aops admin setup` |
+| `review_prompts` | 배포 전 평가의 내용 검토 프롬프트(공통·스킬·코드·노코드)와 종류별 버전. 행이 없는 종류는 aops 기본(버전 0) | console 정책 → 평가 프롬프트 (관리자) |
 | `agents` | 등록된 에이전트와 SPEC 정보 (담당자·담당 팀·중요도·민감도). 다시 등록하면 새 SPEC 값으로 바뀌고, 담당자는 SPEC에 적혀 있을 때만 바뀜 | `register` (노코드는 배포 Job) |
-| `agent_versions` | 저장된 버전, 버전 zip 경로·해시·크기, 상태(`registered`·`production`·`retired`) | `register`, 배포 Job |
+| `agent_versions` | 저장된 버전, 버전 zip 경로·해시·크기, 상태(`registered`·`production`·`retired`), 등록 사유(`note`) | `register`, 배포 Job |
 | `agent_version_skills` | 버전마다 들어 있는 스킬과 UC Skill 이름(첫 배포 때 만들어짐)·해시 | `register` |
 | `genie_agents` | 노코드: 개발용·운영용 Genie Agent와 에이전트 폴더, 공개 그룹, warehouse | console 노코드 만들기, 배포 Job(운영용 space ID) |
-| `validation_runs` | 평가(Gate) 실행 (정책 버전, 단계별 결과, 실패 이유) | evaluate Job |
+| `validation_runs` | 평가(Gate) 실행 (정책 버전, 단계별 결과, 실패 이유). `checks:review`에 승인자용 내용 검토 리포트(항목별 판정·근거·의견, 읽은 파일, 프롬프트 버전, 모델) | evaluate Job |
 | `eval_results` | 평가 문항별 결과 (판정·이유·정답·답). 노코드 운영 버전의 결과가 회귀 기준 | evaluate Job |
 | `release_gates` | 배포 요청과 판정 (`validating` → `pending_approval` → `approved`·`rejected`·`canceled`). 승인 대기 이유는 `decision_reason` | `deploy`, aops 서버 |
 | `approvals` | 승인·반려 이력 (추가만). 자동 승인은 `policy:auto` | aops 서버 |

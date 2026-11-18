@@ -15,7 +15,7 @@
 - **오래 걸리는 일:** 검증·비교 실행·평가는 `202`와 상태를 돌려주고, `…/events`(SSE)로 진행을 흘립니다. Databricks Apps 앞단이 오래 열린 응답·스트림을 끊을 수 있으므로, SSE는 10초 이하 간격으로 신호를 보내고 끊기면 `Last-Event-ID`로 이어 받습니다.
 - **실행 스트림:** 턴 실행 스트림은 AG-UI 이벤트입니다(`threadId`=세션, `runId`=턴). aops만의 정보는 `CUSTOM` 이벤트(`aops.handoff`, `aops.skill`, `aops.guardrail`, `aops.usage`)로 옵니다.
 - **값:** 상태·종류 같은 열거형은 영문 코드입니다. 한글 표시는 화면이 붙입니다.
-- **지금 상태:** dbx 에디션의 스킬·코드·노코드 흐름은 aops 서버가 실제로 처리합니다: 만들기(`POST /projects`, `POST /projects/template`), 셀프 체크 `validate`(`POST …/validations`, 기록 안 함), 등록 `register`, 평가 Gate `evaluate`(`POST …/evaluations`, `GET /evaluations/{id}`), 배포 `deploy`(`POST …/deploy-requests`, `GET /release-gates/{id}`)와 승인·반려·취소, `promote`, `list`, `load`, 레지스트리 조회(에이전트·버전·평가·배포·운영 버전·이력), 노코드 점검·링크, 정책, 내 계정. 나머지(하네스 실행 경로, 세션, 모니터 등)는 요청·응답 형식만 정해져 있고 `501`을 돌려줍니다. 서버에 `AOPS_REGISTRY`·`AOPS_WAREHOUSE_ID`가 없으면 모두 `501`입니다.
+- **지금 상태:** dbx 에디션의 스킬·코드·노코드 흐름은 aops 서버가 실제로 처리합니다: 만들기(`POST /projects`, `POST /projects/template`), 셀프 체크 `validate`(`POST …/validations`, 기록 안 함), 등록 `register`, 평가 Gate `evaluate`(`POST …/evaluations`, `GET /evaluations/{id}`: 내용 검토 리포트 포함), 배포 `deploy`(`POST …/deploy-requests`, `GET /release-gates/{id}`)와 승인(리포트 확인)·반려·취소, `promote`, `list`, `load`, 레지스트리 조회(에이전트·버전·평가·배포·운영 버전·이력), 노코드 점검·링크, 만들기 화면 목록(내 테이블·warehouse·Genie 스페이스, 승인자 찾기), 정책, 평가 프롬프트, 내 계정. 나머지(하네스 실행 경로, 세션, 모니터 등)는 요청·응답 형식만 정해져 있고 `501`을 돌려줍니다. 서버에 `AOPS_REGISTRY`·`AOPS_WAREHOUSE_ID`가 없으면 모두 `501`입니다.
 
 ## 명령 ↔ API
 
@@ -94,6 +94,13 @@
 | `GET /api/v1/projects/{project_id}/config` | 설정 읽기 (aops.toml) | 개발 화면 설정 |
 | `PATCH /api/v1/projects/{project_id}/config` | 설정 바꾸기 (가드레일·하네스·모델 스위치) | 개발 화면 스위치 |
 | `GET /api/v1/projects/{project_id}/components` | 스킬·도구·MCP 목록 |  |
+| `GET /api/v1/me/catalogs` | 내가 쓸 수 있는 카탈로그 | 새 에이전트 (노코드: 테이블·warehouse·Genie 고르기) |
+| `GET /api/v1/me/catalogs/{catalog}/schemas` | 카탈로그의 스키마 (내 권한) | 새 에이전트 (노코드: 테이블·warehouse·Genie 고르기) |
+| `GET /api/v1/me/catalogs/{catalog}/schemas/{schema}/tables` | 스키마의 테이블 (내가 SELECT할 수 있는 것) | 새 에이전트 (노코드: 테이블·warehouse·Genie 고르기) |
+| `GET /api/v1/me/tables/{full_name}` | 테이블 컬럼 (고르기 전에 보기) | 새 에이전트 (노코드: 테이블·warehouse·Genie 고르기) |
+| `GET /api/v1/me/warehouses` | 내가 볼 수 있는 SQL warehouse | 새 에이전트 (노코드: 테이블·warehouse·Genie 고르기) |
+| `POST /api/v1/no-code/table-access` | 고른 테이블을 aops 서비스 주체가 읽을 수 있는지 | 새 에이전트 (노코드: 테이블·warehouse·Genie 고르기) |
+| `GET /api/v1/directory` | 승인자 고르기: 워크스페이스 사용자·그룹 찾기 | 새 에이전트 (승인자) |
 | `POST /api/v1/sessions/{session_id}/turns/{turn_id}/cancel` | 실행 중인 턴 멈추기 | 개발 화면 Chat [멈춤] |
 | `GET /api/v1/sessions/{session_id}/turns/{turn_id}/tools` | 턴의 도구·스킬 사용 | 개발 화면 사용 칩 |
 | `GET /api/v1/sessions/{session_id}/handoffs` | 인계 기록 | 개발 화면 세션 탭 |
@@ -116,6 +123,8 @@
 | `GET /api/v1/deployments/{deployment_id}` | 배포 보기 |  |
 | `GET /api/v1/agents/{agent_id}/production` | 운영 버전 | console 운영 지정 이력 |
 | `GET /api/v1/agents/{agent_id}/events` | 수명주기 이력 (감사 로그) | console 운영 지정 이력 |
+| `GET /api/v1/admin/review-prompts` | 평가 프롬프트 (내용 검토) | console 정책 → 평가 프롬프트 |
+| `POST /api/v1/admin/review-prompts` | 평가 프롬프트 새 버전 | console 정책 → 평가 프롬프트 |
 | `GET /api/v1/admin/rate-cards` | 모델 단가표 | console 관리자 · 단가표 |
 | `PUT /api/v1/admin/rate-cards` | 모델 단가표 바꾸기 | console 관리자 · 단가표 |
 | `GET /api/v1/meta/health` | 서버 상태 |  |

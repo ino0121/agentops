@@ -145,6 +145,65 @@ def test_register_does_not_create_uc_skills(tmp_path):
     assert [stmt.split()[0] for stmt, _ in svc.sql.statements[1:]] == ["INSERT"] * 4
 
 
+def test_register_keeps_the_note_on_the_version_and_the_record(tmp_path):
+    svc, data, _ = registered(tmp_path, None)
+    events = []
+    svc._event_statement = lambda agent_id, version, kind, actor, detail: events.append(detail) or ("SELECT 1", {})
+    svc.register(Caller("dev@x.com"), "agent-x", data, note="  사내 주소·고객 정보 제거  ")
+    insert = [stmt for stmt, _ in svc.sql.statements if "INSERT INTO c.s.agent_versions" in stmt][0]
+    assert "registered_at)" in insert and "note" not in insert  # named columns; the note is set apart
+    update = [p for stmt, p in svc.sql.statements if stmt.startswith("UPDATE c.s.agent_versions SET note")][0]
+    assert update["n"] == "사내 주소·고객 정보 제거" and events[-1]["note"] == "사내 주소·고객 정보 제거"
+
+
+def test_a_registry_without_the_note_column_still_registers(tmp_path):
+    svc, data, deleted = registered(tmp_path, None)
+    recorded = svc.sql.run
+
+    def run(statement, params=None):
+        if "SET note" in statement:
+            raise RuntimeError("[UNRESOLVED_COLUMN.WITH_SUGGESTION] note cannot be resolved")
+        return recorded(statement, params)
+
+    svc.sql.run = run
+    assert svc.register(Caller("dev@x.com"), "agent-x", data, note="x")["version"] == "1.0.0" and not deleted
+
+
+def test_admin_ddl_skips_a_column_that_is_there_already():
+    from aops.admin import run_ddl
+
+    ran = []
+
+    class Sql:
+        def run(self, stmt):
+            ran.append(stmt)
+            if "ADD COLUMNS" in stmt:
+                raise RuntimeError("[FIELD_ALREADY_EXISTS] Cannot add column, because `note` already exists")
+
+    run_ddl(Sql(), ["CREATE TABLE IF NOT EXISTS t (a INT)", "ALTER TABLE t ADD COLUMNS (note STRING)", "CREATE VIEW v AS SELECT 1"])
+    assert len(ran) == 3
+
+    class Broken:
+        def run(self, stmt):
+            raise RuntimeError("[TABLE_OR_VIEW_NOT_FOUND] t")
+
+    with pytest.raises(RuntimeError):
+        run_ddl(Broken(), ["ALTER TABLE t ADD COLUMNS (note STRING)"])
+
+
+def test_a_second_request_says_which_one_is_open():
+    import json
+
+    from aops.dbx.base import gate_open_error
+    from aops.server.app import problem
+
+    error = gate_open_error({"gate_id": "g1", "version": "1.0.0", "decision": "pending_approval", "requester": "dev@x.com"})
+    assert (error.status, error.code) == (409, "gate_open") and error.data["gate_id"] == "g1"
+    body = json.loads(problem(409, error.code, error.message, data=error.data).body)
+    assert body["data"] == {"gate_id": "g1", "version": "1.0.0", "decision": "pending_approval", "requester": "dev@x.com",
+                            "deployment_status": None}
+
+
 def registered(tmp_path, agent, spec_edit=None, upload_fails=False):
     from aops import init, package
 

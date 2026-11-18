@@ -51,8 +51,9 @@
 ### `aops init`
 
 ```bash
-aops init <name> [--type skill|code|no-code] [--harness claude|codex] [--edition local|dbx|omni|custom] [--no-ui]
-aops init <name> --type no-code --description "…" --tables <c.s.t>,… [--genie <ID> --genie-mode copy|move] [--consumer-group <그룹>]
+aops init <name> [--type skill|code|no-code] [--harness claude|codex] [--edition local|dbx|omni|custom] [--approver <이메일|group:그룹>]… [--no-ui]
+aops init <name> --type code [--framework langgraph|openai] [--approver …]
+aops init <name> --type no-code --description "…" --tables <c.s.t>,… [--genie <ID> --genie-mode copy|move] [--consumer-group <그룹>] [--approver …]
 ```
 
 - `--type`: 에이전트 종류입니다. `SPEC.md`의 `build_type`에 기록됩니다.
@@ -62,7 +63,7 @@ aops init <name> --type no-code --description "…" --tables <c.s.t>,… [--geni
 - 하네스 프로젝트 설정을 만듭니다. 이 폴더에서 `claude`·`codex`를 직접 실행해도 aops 설정과 기록이 적용됩니다. 하네스에서 이 폴더와 hook을 신뢰로 승인해야 하고, 회사 관리 설정이 프로젝트 hook을 막지 않아야 합니다.
 - 예시 질문 3개와 기본 가드레일 규칙을 넣고, 끝나면 `aops dev`를 엽니다. `--no-ui`면 열지 않습니다.
 - omni: 같은 정의로 Omnigent 에이전트 YAML을 만듭니다.
-- **지금:** `--type skill`은 이 PC에 폴더를 만듭니다: `README.md`·`SPEC.md`·`aops.toml`·`agent/instructions.md`·스킬 템플릿 `agent/skills/my-skill/`·`evals/questions.yaml`과 하네스 설정([프로젝트 폴더](project.md)). `uv sync`, 가드레일 규칙, `aops dev` 열기, `--no-ui`는 아직 없습니다. `--type code`는 `agentbricks init` 템플릿에 `aops.toml`·`SPEC.md`(`build_type: code`)를 더합니다(PATH에 `agentbricks` 필요). 노코드는 console [새 에이전트] → 노코드(`POST /api/v1/projects`)에서 만듭니다: SPEC 항목을 받아 aops 서비스 주체가 에이전트 폴더(`/Workspace/aops/no-code/<이름>`)를 만들고 요청자·담당 팀에 `CAN MANAGE`를 준 뒤 `SPEC.md`를 쓰고, 개발용 Genie를 요청자의 토큰으로 그 폴더에 만듭니다(테이블로 새로·기존 스페이스 복사·옮기기). 서비스 주체로 대신 만들지 않습니다(작성자가 못 읽는 테이블의 값이 정의에 들어갈 수 있어서). 레지스트리에는 `agents`·`genie_agents`와 `create` 기록이 남고, 버전은 첫 배포 때 생깁니다. console에서 스킬·코드 기반을 고르면 같은 SPEC 항목이 든 템플릿을 내 토큰으로 내 워크스페이스 폴더(`/Workspace/Users/<나>/aops/<이름>`)에 만들거나(`POST /api/v1/projects`, 앱의 `workspace.workspace` 사용자 권한 범위) zip으로 받습니다(`POST /api/v1/projects/template`). CLI도 같습니다: `aops init <이름> --type no-code --description "…" --tables <c.s.t>,…`(또는 `--genie <ID> --genie-mode copy|move`)는 같은 서버 API를 내 로그인으로 부릅니다. 노코드는 폴더가 없으므로 그다음 명령에 `--agent <이름>`을 붙입니다(`validate`·`evaluate`·`deploy`). 폴더에서 `claude`·`codex`를 직접 실행하면 지시·스킬은 같지만 aops 세션 기록과 trace는 남지 않습니다(hook 없음).
+- **지금:** `--type skill`은 이 PC에 폴더를 만듭니다: `README.md`·`SPEC.md`·`aops.toml`·`agent/instructions.md`·스킬 템플릿 `agent/skills/my-skill/`·`evals/questions.yaml`과 하네스 설정([프로젝트 폴더](project.md)). `uv sync`, 가드레일 규칙, `aops dev` 열기, `--no-ui`는 아직 없습니다. `--type code`는 `agentbricks init --framework <langgraph|openai>` 템플릿(기본 LangGraph, `agentbricks`의 기본과 같음)에 `aops.toml`·`SPEC.md`(`build_type: code`)를 더합니다(PATH에 `agentbricks` 필요). console [새 에이전트] → 코드 기반의 "프레임워크" 칸이 같은 것입니다. 노코드는 console [새 에이전트] → 노코드(`POST /api/v1/projects`)에서 만듭니다: SPEC 항목을 받아 aops 서비스 주체가 에이전트 폴더(`/Workspace/aops/no-code/<이름>`)를 만들고 요청자·담당 팀에 `CAN MANAGE`를 준 뒤 `SPEC.md`를 쓰고, 개발용 Genie를 요청자의 토큰으로 그 폴더에 만듭니다(테이블로 새로·기존 스페이스 복사·옮기기). 화면은 내가 `SELECT`할 수 있는 테이블·내 warehouse·내가 열 수 있는 Genie 스페이스를 내 토큰으로 읽어 고르게 하고, 고른 테이블을 aops 서비스 주체가 읽을 수 있는지(운영용 Genie에 필요) 미리 알려 줍니다. 서비스 주체로 대신 만들지 않습니다(작성자가 못 읽는 테이블의 값이 정의에 들어갈 수 있어서). 레지스트리에는 `agents`·`genie_agents`와 `create` 기록이 남고, 버전은 첫 배포 때 생깁니다. console에서 스킬·코드 기반을 고르면 같은 SPEC 항목이 든 템플릿을 내 토큰으로 내 워크스페이스 폴더(`/Workspace/Users/<나>/aops/<이름>`)에 만들거나(`POST /api/v1/projects`, 앱의 `workspace.workspace` 사용자 권한 범위) zip으로 받습니다(`POST /api/v1/projects/template`). CLI도 같습니다: `aops init <이름> --type no-code --description "…" --tables <c.s.t>,…`(또는 `--genie <ID> --genie-mode copy|move`)는 같은 서버 API를 내 로그인으로 부릅니다. 노코드는 폴더가 없으므로 그다음 명령에 `--agent <이름>`을 붙입니다(`validate`·`evaluate`·`deploy`). 폴더에서 `claude`·`codex`를 직접 실행하면 지시·스킬은 같지만 aops 세션 기록과 trace는 남지 않습니다(hook 없음).
 
 ### `aops dev`
 
@@ -172,9 +173,9 @@ aops load <agent_id> [--version x.y.z] [--dir <폴더>]
 
 0. `aops validate`: 셀프 체크 (언제든, 기록 안 함, 배포 조건 아님)
 1. `aops register`: 버전 저장 → `agents`·`agent_versions`·`agent_version_skills` (노코드는 5에서 자동)
-2. `aops evaluate`: 등록된 버전(노코드는 스냅샷)을 evaluate Job이 형식과 품질로 평가 → `validation_runs`·`eval_results` (배포 요청 때 통과 기록이 없으면 자동으로 돌림)
-3. `aops deploy`: 배포 요청 → 평가 결과 확인 → `release_gates`
-4. console 화면: 승인 그룹이 [승인]·[반려] → `approvals` (정책에 따라 자동 승인). CLI는 `aops approve`·`aops reject`(같은 API)
+2. `aops evaluate`: 등록된 버전(노코드는 스냅샷)을 evaluate Job이 형식 → 내용 검토(리포트) → 품질로 평가 → `validation_runs`·`eval_results` (배포 요청 때 통과 기록이 없으면 자동으로 돌림)
+3. `aops deploy`: 배포 요청 → 평가 결과 확인 → `release_gates` (요청 때의 SPEC.md `approvers`를 지정 승인자로 고정)
+4. console 화면: 지정 승인자(없으면 정책의 승인 그룹)가 배포 요청 화면에서 **리포트를 보고** [승인]·[반려] → `approvals`. CLI는 `aops gates <gate>`(리포트)·`aops approve`·`aops reject`(같은 API)
 5. 배포 Job(코드 기반은 aops 서버): 승인 기록 재확인 → 운영 반영 → `deployments`, `agent_production`
 6. `aops promote --to <대상>`: 대상자 권한 부여
 
@@ -196,10 +197,11 @@ aops configure [--edition dbx|omni] [--dry-run]
 ### `aops register`
 
 ```bash
-aops register [--version x.y.z] [--bump fix|minor|major]
+aops register [--version x.y.z] [--bump fix|minor|major] [--note "<사유>"]
 ```
 
 - 버전을 저장합니다. 처음은 1.0.0이고, 그 뒤에는 `--bump`나 등록 규칙으로 올립니다. 검증 통과를 요구하지 않습니다. 강제는 배포 요청에서 합니다.
+- `--note`(`-m`, 선택): 등록 사유입니다. `agent_versions.note`와 등록 기록에 남고, Git 사본 커밋 메시지의 제목(`<에이전트> <버전>: <사유 첫 줄>`)이 됩니다. console 등록 화면의 "사유" 칸과 같고, 배포 요청 사유의 기본값으로도 쓰입니다.
 - 에이전트마다 UC Volume을 하나 두고, 버전마다 `<version>.zip`을 한 번만 씁니다. 등록된 버전은 바꿀 수 없습니다.
 - 스킬: 등록은 볼륨 zip과 스킬 해시만 남깁니다. UC Skill(Unity Gateway Skills)은 **처음 배포할 때** 배포 Job이 만들고, 이때는 아무에게도 읽기 권한을 주지 않습니다. UC Skill의 내용은 늘 운영 버전이고, 새 버전의 내용은 `deploy` 때 바꿉니다. 배포되지 않은 이름(템플릿, 이름을 바꾼 스킬)은 UC에 생기지 않습니다.
 - 코드: UC registered model 버전과 MLflow LoggedModel도 만듭니다. 평가와 trace가 같은 model ID로 이어집니다.
@@ -219,12 +221,14 @@ aops validate                                  # 이 폴더 (서버 없이)
 aops validate --agent <이름> [--version x.y.z]  # 서버가 점검: 노코드는 지금 개발용 Genie, 그 밖은 등록 버전
 ```
 
-강제가 없는 **셀프 체크**입니다. 만드는 중에 언제든 돌려 형식이 맞는지 봅니다. 기록하지 않고, 배포 요청의 조건도 아닙니다.
+강제가 없는 **셀프 체크**입니다. 만드는 중에 언제든 돌려 에이전트가 **템플릿대로 잘 구성됐는지** 체크리스트로 봅니다. 기록하지 않고, 배포 요청의 조건도 아닙니다.
 
-- 검사 항목은 평가(Gate)의 형식 단계와 같습니다.
-  - `SPEC.md`: 필수 항목, 허용 값, 템플릿 문구
-  - 스킬 형식(Agent Skills). 코드 기반은 Agent Bricks 프로젝트(`agent.toml`·`app.yaml`·`pyproject.toml`), 노코드는 Genie 정의 규칙 15개(단계에 규칙별 결과와 Genie 화면에서 고치는 곳)
+- 규칙마다 ID·수준·고치는 곳이 있습니다. **ERROR**는 배포 전 평가(Gate)가 반려하고, **WARN**은 막지 않지만 고칠 것입니다. 전체 규칙: [셀프 체크 규칙](validate.md).
+  - 스킬: `format`(SPEC.md) → `config`(aops.toml) → `instructions`(지시) → `skills`(Agent Skills 형식, 템플릿 스킬) → `evals`(평가셋, WARN만) → `secrets`
+  - 코드 기반: `format` → `config` → `project`(Agent Bricks: `agent.toml`·`app.yaml`·`pyproject.toml`, 진입 코드, `uv.lock`, 샘플 도구) → `secrets`
+  - 노코드: `format`(폴더의 SPEC.md, 공개 그룹) → `definition`(Genie 정의 규칙 15개, Genie 화면에서 고치는 곳) → `secrets`
   - 비밀값·금지 파일(`.env.example` 같은 예시 파일은 금지 파일이 아니고 내용만 봅니다)
+- 출력: 단계마다 `✓`·`✗`, 그 아래 위반(`✗` ERROR)·확인할 것(`!` WARN)을 `규칙 ID: 내용 → 고치는 곳`으로. 끝에 규칙 수와 통과 수. ERROR가 있으면 종료 코드 1
 - 폴더에서는 `aops register`가 보낼 파일 그대로를 내 PC에서 검사합니다. 서버가 필요 없어 local 에디션에서도 됩니다.
 - console은 등록 화면과 에이전트 화면의 [셀프 체크], Genie Code는 "셀프 체크해줘"입니다. 서버 API는 `POST /api/v1/projects/{id}/validations`(zip·폴더 파일·워크스페이스 경로·등록 버전, 노코드는 아무것도 없이)입니다.
 - **지금:** 위 그대로 동작합니다.
@@ -236,22 +240,31 @@ aops evaluate [--version x.y.z]   # 등록 버전 (비우면 마지막)
 aops evaluate --agent <이름>       # 노코드: 지금 개발용 정의와 SPEC.md를 스냅샷으로 떠서
 ```
 
-배포 전에 **강제되는 평가(Gate)**입니다. 배포 요청은 같은 내용·같은 정책으로 통과한 평가를 요구하고, 없으면 배포 요청이 이 평가를 먼저 돌립니다. 미리 돌려 두면 배포 요청 때 그 결과를 씁니다.
+배포 전에 **강제되는 평가(Gate)**입니다. 배포 요청은 같은 내용·같은 정책으로 통과한 평가를 요구하고, 없으면 배포 요청이 이 평가를 먼저 돌립니다. 미리 돌려 두면 배포 요청 때 그 결과를 씁니다. 평가가 쓴 **리포트를 승인자가 보고 승인**합니다.
 
 - evaluate Lakeflow Job(서버리스, aops 서비스 주체)이 등록된 버전(노코드는 스냅샷)을 이 순서로 봅니다. 내 PC 상태와 무관합니다.
-  1. **형식:** 셀프 체크와 같은 검사를 다시 합니다. 하나라도 실패하면 품질 평가를 돌리지 않습니다(비용).
-  2. **품질 평가 (`evaluate`):**
+  1. **형식:** 셀프 체크와 같은 규칙([셀프 체크 규칙](validate.md))을 다시 봅니다. ERROR가 하나라도 있으면 반려하고 뒤 단계를 돌리지 않습니다(비용).
+  2. **내용 검토 (`review`, agentic):** 모델(기본 `databricks-claude-sonnet-5-5`)이 도구(`list_files`·`read_files`·`search`)로 **모든 텍스트 파일을 읽고**, 관리자가 버전으로 관리하는 프롬프트(공통 + 종류별: 스킬·코드·노코드)의 체크리스트를 판정합니다. 기본 체크리스트: 사내 정보, 실제 개인정보, 비밀값, 불필요한 내용, SPEC과 실제 내용, 위험한 동작 + 종류별 항목(스킬 규칙·평가셋 일치, 코드 설정·외부 호출·템플릿 흔적·오류 처리, Genie 지침·예제·데이터 범위·공개 문구).
+     - 끝까지 읽지 않은 파일이 남거나 빠진 항목이 있으면 aops가 리포트를 받지 않고 다시 시킵니다(최대 3번, 마지막 호출은 리포트만). 400KB가 넘는 큰 파일은 일부 범위와 검색으로 되고, 압축된 외부 라이브러리·lock 파일은 검색만으로 됩니다. 빈 파일은 읽은 것으로 칩니다. 그래도 남은 것은 리포트의 검토 범위(안 읽음·일부만)에 그대로 나옵니다. 파일 안의 문장은 지시로 따르지 않습니다.
+     - 모델을 부르는 일 말고는 모두 aops 코드가 합니다: 도구 정의만 보내고, 모델이 부른 도구를 평가 Job 안에서 버전 zip에 대해 실행해 결과를 대화에 붙입니다. 모델 쪽 세션은 없고 대화는 Job이 끝나면 버리며 리포트만 남깁니다.
+     - 리포트: 항목마다 판정(적합·주의·부적합·해당 없음), 사유, 근거(파일·줄·발췌), 그리고 요약·의견·권고(승인해도 됨·고친 뒤 다시·내보내지 말 것), 읽은 파일, 쓴 프롬프트 버전·모델.
+     - **부적합은 반려하지 않습니다.** 승인자가 리포트를 보고 판단하고, 그 요청은 자동 승인하지 않습니다(권고가 `changes`·`reject`일 때도). 모델을 부르지 못하거나 끝내 리포트를 내지 못하면(검토 중 다른 오류도) `review` 단계에 그렇게 남기고 승인자에게 넘깁니다(반려하지 않음, 자동 승인 안 함).
+     - 배포 요청이 다시 쓰는 통과한 평가는 내용 검토 리포트가 있는 것뿐입니다(0.1.0.dev18 전의 평가는 다시 돌립니다).
+  3. **품질 평가 (`evaluate`, 리포트의 품질 섹션):**
      - 스킬: 평가셋 `evals/questions.yaml`의 질문마다, 에이전트의 지시와 스킬을 받은 모델이 답하고 판정 모델이 정답(`expected`)이나 판정 기준(`guideline`)과 비교합니다. 정확도가 SPEC 중요도별 기준(high 90%·medium 85%·low 80%) 이상이어야 합니다. 평가셋이 없거나 템플릿 그대로면 실패입니다.
      - 노코드: Genie 벤치마크(Genie 평가 API)의 정확도(검토 필요 문항은 빼고)가 같은 기준 이상이고, 운영 버전에서 GOOD이던 문항이 BAD가 되지 않아야 합니다(회귀 0개). 문항당 약 13초 걸립니다.
      - 코드: 다음 단계입니다. 새 버전을 띄워 물어볼 곳이 필요해서, 지금은 건너뜁니다(형식·프로젝트·비밀값은 검사).
-  3. **무결성 (노코드):** 평가가 끝날 때 개발용 정의가 스냅샷과 같은지 봅니다. 바뀌었으면 `stale`로 반려되어 다시 요청합니다. 배포는 평가한 스냅샷으로 하므로 평가하지 않은 수정이 운영에 섞이지 않습니다.
-  4. **기록 (`record`):** zip(스냅샷)이 등록(요청) 때 해시와 같은지 봅니다.
-- 결과는 `validation_runs`(단계별)와 `eval_results`(문항별: 판정·이유·정답·답)에 남고, Job 실행 출력에도 찍힙니다. 노코드 운영 버전의 문항별 결과가 다음 평가의 회귀 기준입니다.
+     - 기준 미달도 반려하지 않고 승인자가 판단합니다(자동 승인하지 않음).
+  4. **무결성 (노코드):** 평가가 끝날 때 개발용 정의가 스냅샷과 같은지 봅니다. 바뀌었으면 `stale`로 반려되어 다시 요청합니다. 배포는 평가한 스냅샷으로 하므로 평가하지 않은 수정이 운영에 섞이지 않습니다.
+  5. **기록 (`record`):** zip(스냅샷)이 등록(요청) 때 해시와 같은지 봅니다.
+- 결과는 `validation_runs`(단계별, 리포트는 `checks:review`)와 `eval_results`(문항별: 판정·이유·정답·답)에 남고, Job 실행 출력에도 찍힙니다. 출력: 단계 줄, 내용 검토의 판정·요약과 주의·부적합 항목(근거 2개까지), 품질 문항. 노코드 운영 버전의 문항별 결과가 다음 평가의 회귀 기준입니다.
 - 정책 `validation_mode`가 강제 정도를 정합니다.
   - `mandatory`: 실패하면 반려
   - `optional`: 실패해도 결과를 남기고 승인자에게
   - `exempt`: 평가 없이
 - 정책 `evaluate`: `accuracy_min`(중요도별), `max_regressions`, `model`(답하는 모델)·`judge_model`(기본 `databricks-claude-sonnet-4-6`), `max_questions`, `timeout_sec`.
+- 정책 `review`: `model`(기본 `databricks-claude-sonnet-5-5`, 도구 호출이 되는 모델), `max_turns`(기본 24), `read_chars`, `timeout_sec`. 검토 프롬프트는 console [정책] → 평가 프롬프트에서 관리자가 고치고(`POST /api/v1/admin/review-prompts`), 바꿀 때마다 그 종류의 새 버전이 됩니다(`review_prompts` 테이블, 처음은 aops 기본 버전 0).
+- 걸리는 시간(시험 워크스페이스 실측): 스킬 7개 파일 약 20초, Agent Bricks 코드 33개 파일(7천 줄) 약 100초. 모델 호출마다 대화를 다시 보내므로 파일이 많을수록 토큰이 늘어납니다.
 - 개발 중 기록에 기대지 않습니다. 필요한 증거는 이 Job이 직접 만듭니다.
 - 설계(아직 없음): 가드레일 레드팀(`--suite redteam`)과 하네스 이어가기(`--suite handoff`) 시험, 개발 중 구성 비교(MLflow).
 - **지금:** 스킬·노코드는 위 그대로 동작합니다. 코드 기반은 품질 평가가 다음 단계입니다. console은 에이전트 화면의 [평가]와 평가(Gate) 탭(문항별 결과)이고, Genie Code는 "평가해줘"입니다.
@@ -280,6 +293,7 @@ aops deploy --dev
   - 같은 버전을 다시 요청하면 진행 중인 요청을 이어서 보여 주고, 다른 버전의 요청이 진행 중이면 막습니다.
   - 이 내용·이 정책으로 통과한 평가가 없으면 evaluate Job을 먼저 돌립니다(`exempt`면 건너뜀). 실패하면 `mandatory`는 승인자에게 가기 전에 반려하고, `optional`은 실패 결과를 남긴 채 승인자에게 넘깁니다(승인 방식이 `auto`여도 사람이 판단).
   - 승인: `auto`면 `policy:auto`로 자동 승인합니다. `optional`이면 SPEC의 중요도가 `low`이고 민감도가 `public`·`internal`일 때만 자동 승인하고, 아니면 승인자가 필요합니다(이유가 `decision_reason`에 남음). `required`면 늘 승인자가 console 화면의 배포 요청함이나 [`aops approve`](#aops-gates--approve--reject)로 합니다.
+  - 이 셋보다 먼저: **SPEC.md에 `approvers`(지정 승인자)가 있으면 정책이 `auto`여도 자동 승인하지 않고 그 승인자만** 승인합니다(더 엄격한 쪽). 내용 검토에 부적합이 있거나 품질 평가가 기준 미달이어도 자동 승인하지 않습니다.
   - 사람이 판단해야 하면 CLI는 gate ID와 승인·반려·취소 명령을 보여 주고 끝납니다. `aops deploy`를 다시 치면 그 요청을 이어서 보여 줍니다.
   - `--cancel`: 요청자나 담당자·담당 팀이 평가 중·승인 대기인 요청을 취소합니다(`gate_canceled`). 운영 반영 뒤에는 이전 버전을 배포해 되돌립니다.
   - 배포 Job(`aops-deploy`, 서비스 주체 실행)이 승인과 zip 해시를 다시 확인하고, 스킬마다 UC Skill을 처음이면 만들고 아니면 내용을 이 버전으로 바꿉니다. 이전 운영 버전에 있던 스킬이 이 버전에 없으면 지우지 않고 Job 출력에 알립니다.
@@ -293,17 +307,19 @@ aops deploy --dev
 
 ```bash
 aops gates [--mine | --agent <agent_id>]
-aops approve <gate_id> [--comment <의견>]
+aops gates <gate_id>                         # 그 요청의 평가 리포트 (체크리스트·근거·의견)
+aops approve <gate_id> [--comment <의견>]    # 리포트 요약을 보여 주고 승인
 aops reject <gate_id> --reason <이유>
 ```
 
 console 화면의 배포 요청·승인과 같은 일을 CLI로 합니다. 모두 aops 서버의 같은 승인 API를 불러서, 어느 화면에서 하든 규칙이 같습니다.
 
-- `gates`: 기본은 내가 승인할 차례인 요청(본인 요청 제외, 승인 그룹일 때)입니다. `--mine`은 내가 낸 요청, `--agent`는 한 에이전트의 요청을 최신 순으로 보여 줍니다. 승인 대기 이유(평가 실패, approval optional의 판단)도 함께 보여 줍니다.
-- `approve`: 승인 그룹만 할 수 있고 요청자 본인은 할 수 없습니다. 필요한 승인 수가 차면 배포 Job이 시작됩니다.
+- `gates`: 기본은 내가 승인할 차례인 요청(본인 요청 제외, 내가 지정 승인자이거나 지정 승인자가 없고 승인 그룹일 때)입니다. `--mine`은 내가 낸 요청, `--agent`는 한 에이전트의 요청을 최신 순으로 보여 줍니다. 승인 대기 이유(평가 실패, 검토 부적합, 지정 승인자, approval optional의 판단)도 함께 보여 줍니다. gate ID를 주면 그 요청의 평가 리포트 전체를 보여 줍니다.
+- `approve`: 요청에 지정 승인자가 있으면 그 사람(또는 그룹의 사람)만, 없으면 승인 그룹만 할 수 있고 요청자 본인은 할 수 없습니다. 평가 리포트 요약을 먼저 보여 주고, **본 리포트(`validation_run_id`)를 함께 보내야** 승인됩니다(다른 리포트로는 409). 필요한 승인 수가 차면 배포 Job이 시작됩니다.
 - `reject`: 승인과 같은 규칙입니다. 요청자 본인은 반려 대신 `aops deploy --cancel`을 씁니다.
+- **개발용 예외 (`dev_approvers`):** 혼자 시험할 때 관리자가 정책에 넣은 사람은 본인 요청이나 지정 승인자가 다른 요청도 승인·반려할 수 있습니다. 그런 승인은 `approvals.comment`에 "[개발 예외 승인: …]", `gate_approved` 이벤트에 `exception: dev_approver`로 남습니다. 운영에서는 비웁니다(console 정책 화면, `aops admin setup --only policy --dev-approver <이메일>`).
 - 승인·반려는 `approvals`와 `agent_events`(`gate_approved`·`gate_rejected`, 결재한 사람)에 남습니다.
-- **지금:** 동작합니다. 승인 그룹은 `aops admin setup --approver-group`으로 정하고, 비우면 요청자가 아닌 누구나 승인할 수 있습니다.
+- **지금:** 동작합니다. 지정 승인자는 만들 때(console [새 에이전트]의 승인자 고르기, `aops init --approver`) SPEC.md `approvers`에 들어가고 SPEC.md에서 바꿉니다(다음 배포 요청부터). 승인 그룹은 `aops admin setup --approver-group`으로 정하고, 비우면 요청자가 아닌 누구나 승인할 수 있습니다. 정책 `approvers_required`를 켜면 승인자가 없는 에이전트는 셀프 체크·평가에서 ERROR입니다.
 
 ### `aops promote`
 
@@ -401,7 +417,7 @@ aops admin policy show|diff
   3. `dist`: Job이 설치할 aops 패키지를 빌드해 볼륨 `aops_dist`에 올림
   4. `app`: aops 서버(Databricks App)를 배포하고 레지스트리·웨어하우스·패키지 경로를 환경변수로 넣음. 코드는 `/Workspace/aops/server/<앱>`(워크스페이스 관리자만 쓰기)에 올리고, 루트에 폴더를 만들 권한이 없으면 실행한 관리자의 홈 폴더(본인과 관리자만 쓰기)에 둡니다. 그 폴더에 쓸 수 있는 주체를 보여 줌. `/Workspace/Shared`는 모든 사용자가 `CAN_MANAGE`를 물려받아 쓰지 않습니다. warehouse를 앱 자원으로 붙일 권한이 없으면 ID만 넘기고, 권한 부여가 실패하면 멈추지 않고 주인에게 부탁할 `GRANT` 문을 보여 줍니다
   5. `grants`: 서버 서비스 주체에 카탈로그·스키마·`aops_dist` 권한, Git 사본이 켜져 있으면 그 연결의 `USE CONNECTION` (사람에게는 사용·조회만). 노코드 에이전트 폴더의 상위 `/Workspace/aops/no-code`를 만들고 서비스 주체에 `CAN_MANAGE`(실패하면 서버는 서비스 주체의 홈 폴더를 씀)
-  - `app`은 앱의 사용자 권한 범위에 `files`(스킬 load)·`genie`(노코드 개발용 Genie를 요청자 권한으로)·`workspace.workspace`(요청자 폴더에 템플릿)를 더합니다. 워크스페이스가 모르는 범위는 건너뛰고 알립니다. 범위가 바뀌면 사용자는 화면을 다시 열 때 동의합니다
+  - `app`은 앱의 사용자 권한 범위에 `files`(스킬 load)·`genie`(노코드 개발용 Genie를 요청자 권한으로)·`workspace.workspace`(요청자 폴더에 템플릿)·`catalog.catalogs:read`·`catalog.schemas:read`·`catalog.tables:read`·`sql:read`(노코드 만들기 화면의 내 테이블·warehouse 목록, 읽기만)를 더합니다. 워크스페이스가 모르는 범위는 건너뛰고 알립니다. 범위가 바뀌면 사용자는 화면을 다시 열 때 동의합니다
   - `--users-group`을 주면 그 그룹에 레지스트리 조회(카탈로그·스키마 USE, 스키마 SELECT)를 줍니다. 쓰기 권한은 주지 않습니다
   6. `genie`: Genie Code 워크스페이스 스킬 `aops`(`/Workspace/.assistant/skills/aops/SKILL.md`)와 그 스킬이 쓰는 aops 코드(`/Workspace/aops/genie/src`, 관리자만 쓰기, `--users-group`에 읽기). Genie Code에 "이 에이전트 등록해줘", "배포해줘"라고 하면 노트북에서 PC의 `aops register`·`aops deploy`와 같은 코드가 요청한 사람의 신원으로 서버를 부릅니다. 노트북 토큰은 서버 앱용 토큰으로 바꿔 씁니다. Genie Code의 Auto Mode는 실행 전에 한 번 확인을 받습니다
   - Git 사본에 쓸 연결은 관리자가 먼저 만듭니다: 토큰을 시크릿에 넣고 `CREATE CONNECTION <이름> TYPE HTTP OPTIONS (host 'https://api.github.com', port '443', base_path '/', bearer_token secret('<scope>', '<key>'))`. 토큰은 조직 저장소 전체에 코드(Contents) 쓰기와 저장소 만들기 권한이 필요합니다. GitHub Enterprise Server는 host만 바꿉니다
