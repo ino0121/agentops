@@ -146,12 +146,13 @@ def test_registration_route_takes_a_zip_or_folder_files(tmp_path, monkeypatch):
 
     project = init.create(tmp_path, "agent-x", edition="dbx")
     archive = package.build(project).data
-    got = []
+    got, notes = [], []
 
-    def register(caller, agent_id, data, version, bump, source=None):
+    def register(caller, agent_id, data, version, bump, source=None, note=None):
         got.append(package.read(data))
+        notes.append(note)
         return {"agent_id": agent_id, "version": "1.0.0", "status": "registered", "source_sha256": "x", "artifact_path": "/v",
-                "size_bytes": len(data), "registered_at": "2026-11-13T00:00:00Z", "spec": "{}", "skills": []}
+                "size_bytes": len(data), "registered_at": "2026-11-13T00:00:00Z", "spec": "{}", "skills": [], "note": note}
 
     monkeypatch.setattr(routes, "service_for", lambda command: SimpleNamespace(register=register))
     monkeypatch.setattr(routes, "caller_of", lambda request, svc: Caller("dev@x.com"))
@@ -159,8 +160,9 @@ def test_registration_route_takes_a_zip_or_folder_files(tmp_path, monkeypatch):
     url = "/api/v1/projects/agent-x/registrations"
     assert client.post(url, files={"archive": ("agent-x.zip", archive, "application/zip")}).status_code == 201
     folder = [("files", (f"agent-x/{p.relative_to(project.root).as_posix()}", p.read_bytes())) for p in sorted(project.root.rglob("*")) if p.is_file()]
-    assert client.post(url, files=folder).status_code == 201
-    assert got[0] == got[1] and "SPEC.md" in got[0]
+    answer = client.post(url, files=folder, data={"note": "사내 주소 제거"})
+    assert answer.status_code == 201 and answer.json()["note"] == "사내 주소 제거"
+    assert got[0] == got[1] and "SPEC.md" in got[0] and notes == [None, "사내 주소 제거"]
     assert client.post(url, data={"bump": "minor"}).status_code == 400
     monkeypatch.setattr(routes, "MAX_UPLOAD", 10)
     assert client.post(url, files={"archive": ("agent-x.zip", archive, "application/zip")}).status_code == 413

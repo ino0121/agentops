@@ -27,6 +27,7 @@ class Problem(BaseModel):
     detail: str | None = Field(None, examples=["`aops validate`에 해당하는 API는 아직 구현 전입니다."])
     code: str = Field(examples=["not_implemented"], description="화면이 분기할 때 쓰는 고정 코드")
     command: str | None = Field(None, examples=["aops validate"], description="같은 일을 하는 CLI 명령")
+    data: dict[str, Any] | None = Field(None, description="코드별 추가 정보. gate_open: 열린 요청(gate_id·version·decision·requester·deployment_status)")
 
 
 class Page(BaseModel, Generic[T]):

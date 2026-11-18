@@ -16,12 +16,17 @@ class ProjectCreate(BaseModel):
     name: str = Field(examples=["price-helper"], description="프로젝트·에이전트 이름")
     type: AgentType = Field("skill", description="`--type`: skill(누구나) · code(AI 개발자) · no_code(Genie)")
     harness: str = Field("claude", examples=["claude", "codex"], description="`--harness` 기본 하네스")
+    framework: Literal["langgraph", "openai"] = Field(
+        "langgraph", description="`--framework`: code일 때 Agent Bricks 프레임워크. langgraph(LangGraph) · openai(OpenAI Agents SDK)")
     edition: Literal["local", "dbx", "omni", "custom"] = "dbx"
     genie_space_id: str | None = Field(None, description="`--genie`: no_code일 때 가져올 Genie Agent. 없으면 새로 만든다")
     genie_mode: Literal["new", "copy", "move"] | None = Field(
         None, description="no_code: new(테이블로 새로 만들기) · copy(genie_space_id를 에이전트 폴더로 복사) · move(genie_space_id를 에이전트 폴더로 옮기기). "
                           "비우면 genie_space_id가 있을 때 copy, 없으면 new")
-    tables: list[str] = Field(default_factory=list, examples=[["main.sales.orders"]], description="no_code new: 데이터 소스 <catalog>.<schema>.<table> (1~30개)")
+    tables: list[str] = Field(default_factory=list, examples=[["main.sales.orders"]],
+                              description="no_code new: 데이터 소스 <catalog>.<schema>.<table>. 메트릭 뷰와 합쳐 1~30개. 화면은 내가 SELECT할 수 있는 것에서 고른다")
+    metric_views: list[str] = Field(default_factory=list, examples=[["main.sales.revenue_metrics"]],
+                                    description="no_code new: 데이터 소스 중 메트릭 뷰 (Genie 정의의 metric_views)")
     warehouse_id: str | None = Field(None, description="no_code: Genie가 쓸 SQL warehouse. 비우면 복사 원본이나 aops 서버의 warehouse")
     display_name: str | None = Field(None, examples=["매출 도우미"], description="SPEC name (표시 이름). 비우면 name")
     description: str | None = Field(None, examples=["지역별 매출과 할인 효과를 답한다"], description="SPEC description (이 에이전트가 하는 일)")
@@ -30,6 +35,8 @@ class ProjectCreate(BaseModel):
     data_sensitivity: Literal["public", "internal", "confidential", "personal"] = "internal"
     security_level: str = Field("general", description="관리자 정책의 보안 등급 코드")
     consumer_group: str | None = Field(None, description="no_code: 공개 그룹 (배포 때 운영 Genie에 CAN RUN)")
+    approvers: list[str] = Field(default_factory=list, examples=[["lead@example.com", "group:agent-approvers"]],
+                                 description="배포 요청을 승인할 사람: 이메일이나 group:<그룹>. SPEC.md approvers가 되고, 요청은 이 승인자만 승인한다")
     location: str | None = Field(
         None,
         examples=["/Workspace/Users/me@example.com/aops/price-helper"],
@@ -111,13 +118,6 @@ class ConfigureResult(BaseModel):
     migration: list[str] = Field(default_factory=list, examples=[["세션 3개 → Agent sessions", "평가 기록 → Databricks Experiment"]])
 
 
-class GenieSpace(BaseModel):
-    space_id: str = Field(examples=["01f0a1b2c3d4"])
-    title: str = Field(examples=["매출 분석"])
-    owner: str | None = None
-    can_edit: bool = Field(description="가져오려면 CAN EDIT가 필요하다")
-
-
 @router.get("/projects", summary="프로젝트 목록", **command(None, ALL, screen="프로젝트 선택"))
 def list_projects(cursor: str | None = None, limit: int = Query(50, le=200)) -> Page[ProjectSummary]:
     raise todo(None)
@@ -130,7 +130,7 @@ def _server_url(request: Request) -> str:
 
 def _spec(body: "ProjectCreate", owner: str) -> dict[str, Any]:
     return {"agent_id": body.name, "name": body.display_name or body.name, "build_type": body.type, "owner": owner,
-            "owner_group": body.owner_group or "", "service_criticality": body.service_criticality,
+            "owner_group": body.owner_group or "", "approvers": ", ".join(body.approvers), "service_criticality": body.service_criticality,
             "data_sensitivity": body.data_sensitivity, "security_level": body.security_level, "description": body.description or ""}
 
 
@@ -150,14 +150,15 @@ def template_files(body: "ProjectCreate", server: str, owner: str) -> dict[str, 
             if body.type == "code":
                 from ...dbx import code
 
-                project = init.create_code(Path(tmp), body.name, agentbricks=str(code.agentbricks_cli()))
+                project = init.create_code(Path(tmp), body.name, framework=body.framework, agentbricks=str(code.agentbricks_cli()),
+                                           approvers=body.approvers)
             else:
-                project = init.create(Path(tmp), body.name, harness=body.harness, edition="dbx")
+                project = init.create(Path(tmp), body.name, harness=body.harness, edition="dbx", approvers=body.approvers)
         except ValueError as error:
             raise ServiceError(400, "bad_name", "이름은 영문 소문자·숫자·하이픈 63자 이하입니다", "aops init") from error
         toml = project.root / "aops.toml"
         toml.write_text(toml.read_text(encoding="utf-8").replace('server = ""', f'server = "{server}"', 1), encoding="utf-8")
-        if body.description:  # the SPEC fields from the screen become SPEC.md
+        if body.description or body.approvers:  # the SPEC fields from the screen become SPEC.md
             (project.root / "SPEC.md").write_text(init.render_spec(_spec(body, owner)), encoding="utf-8")
         return {path.relative_to(project.root).as_posix(): path.read_bytes() for path in sorted(project.root.rglob("*")) if path.is_file()}
 
@@ -219,9 +220,8 @@ def create_project(body: ProjectCreate, request: Request) -> ProjectCreated:
     if body.type != "no_code":
         files = template_files(body, _server_url(request), caller.email)
         row = svc.create_in_workspace(caller, body.type, body.name, files, _spec(body, caller.email), body.location)
-        links = [Link(label="편집기에서 열기 (Genie Code)", url=row["open_url"])] if row.get("open_url") else []
-        if row.get("folder_url"):
-            links.append(Link(label="폴더 열기", url=row["folder_url"]))
+        links = ([Link(label="폴더 열기", url=row["folder_url"])] if row.get("folder_url") else []) + (
+            [Link(label="편집기에서 열기 (Genie Code)", url=row["open_url"])] if row.get("open_url") else [])
         return ProjectCreated(agent_id=row["agent_id"], type=body.type, location=row["workspace_path"], files=row["files"],
                               open_file=row["open_file"], links=links)
     row = svc.create_no_code(caller, body.model_dump())
@@ -272,11 +272,3 @@ def remove_component(project_id: str, kind: ComponentKind, name: str) -> None:
 @router.post("/projects/{project_id}/configure", summary="Databricks 연결 확인·에디션 이전", **command("aops configure", DBX))
 def configure(project_id: str, body: ConfigureRequest) -> ConfigureResult:
     raise todo("aops configure")
-
-
-@router.get(
-    "/genie/spaces", summary="Genie Agent 목록 (노코드 프로젝트용)",
-    **command("aops init --type no-code", DBX, screen="노코드 프로젝트 만들기"),
-)
-def list_genie_spaces(q: str | None = None, cursor: str | None = None) -> Page[GenieSpace]:
-    raise todo("aops init --type no-code")

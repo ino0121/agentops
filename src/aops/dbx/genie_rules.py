@@ -18,23 +18,23 @@ PII_PATTERNS = ("card", "ssn", "jumin", "resident", "phone", "mobile", "email", 
                 "주민", "연락처", "전화", "휴대", "이메일", "주소", "여권", "계좌", "생년")
 SECTIONS = ("## PURPOSE", "## CONSTRAINTS", "Instructions you must follow when providing summaries")
 
-# id: level (error | warn | off), values, and where to fix it in the Genie screen
+# id: level (error | warn | off), values, what it checks and where to fix it in the Genie screen
 RULES: dict[str, dict[str, Any]] = {
-    "sources.count": {"level": "error", "min": 1, "max": 30, "fix": "Data → 테이블 추가·정리 (Genie 한도 30개)"},
-    "columns.pii_hidden": {"level": "error", "fix": "Data → 테이블 → 컬럼 숨김(Hide)"},
-    "snippets.qualified": {"level": "error", "fix": "Instructions → SQL Expressions를 테이블.컬럼 형태로"},
-    "examples.count": {"level": "error", "min": 5, "fix": "Instructions → SQL Queries에 예제 질문·SQL 추가"},
-    "text.single": {"level": "error", "max": 1, "fix": "Instructions → Text는 하나로 합치기"},
-    "benchmarks.min": {"level": "error", "min": 5, "fix": "Benchmarks → Add benchmark"},
-    "snippets.limit": {"level": "error", "max_snippets": 200, "max_chars": 25000, "fix": "Instructions → 스니펫·텍스트 줄이기"},
-    "sources.focused": {"level": "warn", "max": 5, "fix": "Data → 꼭 필요한 테이블만"},
-    "sources.description": {"level": "warn", "fix": "Data → 테이블 설명"},
-    "columns.entity_matching_scope": {"level": "warn", "fix": "Data → 컬럼 설정 → ID형 컬럼의 값 매칭 끄기"},
-    "columns.synonyms": {"level": "warn", "fix": "Data → 컬럼 설정 → 동의어"},
-    "joins.defined": {"level": "warn", "fix": "Instructions → Joins"},
-    "text.length": {"level": "warn", "max": 2000, "fix": "Instructions → Text 2,000자 이하로"},
-    "text.sections": {"level": "warn", "fix": "Instructions → Text 표준 템플릿(PURPOSE·CONSTRAINTS·요약 지침)"},
-    "sources.allowed": {"level": "off", "catalogs": [], "fix": "Data → 허용된 카탈로그·스키마의 테이블만"},
+    "sources.count": {"level": "error", "min": 1, "max": 30, "check": "데이터 소스(테이블·메트릭 뷰)가 1~30개", "fix": "Data → 테이블 추가·정리 (Genie 한도 30개)"},
+    "columns.pii_hidden": {"level": "error", "check": "개인정보로 보이는 컬럼(이름·UC 태그)이 숨겨져 있다", "fix": "Data → 테이블 → 컬럼 숨김(Hide)"},
+    "snippets.qualified": {"level": "error", "check": "SQL 표현식이 테이블.컬럼 형태다", "fix": "Instructions → SQL Expressions를 테이블.컬럼 형태로"},
+    "examples.count": {"level": "error", "min": 5, "check": "예제 질문·SQL이 5개 이상", "fix": "Instructions → SQL Queries에 예제 질문·SQL 추가"},
+    "text.single": {"level": "error", "max": 1, "check": "Text Instruction이 하나다", "fix": "Instructions → Text는 하나로 합치기"},
+    "benchmarks.min": {"level": "error", "min": 5, "check": "벤치마크(질문·정답 SQL)가 5개 이상", "fix": "Benchmarks → Add benchmark"},
+    "snippets.limit": {"level": "error", "max_snippets": 200, "max_chars": 25000, "check": "스니펫 200개·텍스트 25,000자 이하", "fix": "Instructions → 스니펫·텍스트 줄이기"},
+    "sources.focused": {"level": "warn", "max": 5, "check": "데이터 소스가 5개 이하 (권장)", "fix": "Data → 꼭 필요한 테이블만"},
+    "sources.description": {"level": "warn", "check": "모든 테이블에 설명이 있다", "fix": "Data → 테이블 설명"},
+    "columns.entity_matching_scope": {"level": "warn", "check": "ID형 컬럼의 값 매칭이 꺼져 있다", "fix": "Data → 컬럼 설정 → ID형 컬럼의 값 매칭 끄기"},
+    "columns.synonyms": {"level": "warn", "check": "동의어가 있는 컬럼이 하나 이상", "fix": "Data → 컬럼 설정 → 동의어"},
+    "joins.defined": {"level": "warn", "check": "데이터 소스가 둘 이상이면 조인이 정의돼 있다", "fix": "Instructions → Joins"},
+    "text.length": {"level": "warn", "max": 2000, "check": "Text Instruction이 2,000자 이하", "fix": "Instructions → Text 2,000자 이하로"},
+    "text.sections": {"level": "warn", "check": "Text에 표준 섹션(PURPOSE·CONSTRAINTS·요약 지침)이 있다", "fix": "Instructions → Text 표준 템플릿(PURPOSE·CONSTRAINTS·요약 지침)"},
+    "sources.allowed": {"level": "off", "catalogs": [], "check": "허용된 카탈로그·스키마의 데이터만 쓴다 (기본 꺼짐, 정책에서 켬)", "fix": "Data → 허용된 카탈로그·스키마의 테이블만"},
 }
 
 

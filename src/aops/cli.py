@@ -21,14 +21,14 @@ def cmd_init(args: argparse.Namespace) -> int:
         if not shutil.which("agentbricks"):
             print("aops: 코드 기반은 Agent Bricks CLI가 필요합니다: uv tool install databricks-agentbricks", file=sys.stderr)
             return 2
-        project = init.create_code(Path.cwd(), args.name)
-        print(f"created {project.root} (Agent Bricks 프로젝트 + aops.toml·SPEC.md)")
+        project = init.create_code(Path.cwd(), args.name, framework=args.framework, approvers=args.approver)
+        print(f"created {project.root} (Agent Bricks {args.framework} 프로젝트 + aops.toml·SPEC.md)")
         print(f"next: cd {args.name} → SPEC.md의 description, agent/agent.py를 고친 뒤 agentbricks dev로 시험, aops register")
         return 0
     if args.type == "no-code":
         return init_no_code(args)
     harness.get(args.harness)  # fail early on an unknown harness
-    project = init.create(Path.cwd(), args.name, harness=args.harness, edition=args.edition)
+    project = init.create(Path.cwd(), args.name, harness=args.harness, edition=args.edition, approvers=args.approver)
     print(f"created {project.root}")
     for folder in project.skill_folders():
         note = "  (템플릿: 폴더 이름과 SKILL.md를 내 스킬로 바꿔 쓰세요)" if folder.name == init.TEMPLATE_SKILL else ""
@@ -48,7 +48,7 @@ def init_no_code(args: argparse.Namespace) -> int:
     body = {"name": args.name, "type": "no_code", "display_name": args.display_name, "description": args.description,
             "tables": [t.strip() for t in (args.tables or "").split(",") if t.strip()], "genie_space_id": args.genie,
             "genie_mode": args.genie_mode if args.genie else "new", "warehouse_id": args.warehouse,
-            "owner_group": args.owner_group, "consumer_group": args.consumer_group,
+            "owner_group": args.owner_group, "consumer_group": args.consumer_group, "approvers": args.approver,
             "service_criticality": args.criticality, "data_sensitivity": args.sensitivity}
     try:
         row = Server().request("POST", "/projects", body=body)
@@ -148,6 +148,10 @@ def parser() -> argparse.ArgumentParser:
     init_.add_argument("--type", choices=["skill", "code", "no-code"], default="skill")
     init_.add_argument("--harness", default="claude", help="기본 하네스 (claude, codex)")
     init_.add_argument("--edition", choices=["local", "dbx", "omni", "custom"], default="local")
+    init_.add_argument("--approver", action="append", default=[],
+                       help="배포 요청을 승인할 사람: 이메일이나 group:<그룹> (여러 번). SPEC.md approvers가 된다")
+    init_.add_argument("--framework", choices=list(init.FRAMEWORKS), default=init.FRAMEWORKS[0],
+                       help="코드 기반(--type code)의 Agent Bricks 프레임워크: langgraph(LangGraph) · openai(OpenAI Agents SDK)")
     nc = init_.add_argument_group("노코드 (--type no-code, aops 서버가 만든다)")
     nc.add_argument("--description", help="이 Genie가 답하는 질문 (SPEC description)")
     nc.add_argument("--tables", help="새로 만들 때 데이터 소스 <catalog>.<schema>.<table>, 쉼표로")

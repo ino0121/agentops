@@ -22,11 +22,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import package
-from ..init import SKILL_DESCRIPTION, SPEC_DESCRIPTION, TEMPLATE_SKILL
+from .. import validate
+from ..validate import FORBIDDEN_FILES, SECRET_PATTERNS, SKILL_NAME, find_secrets, skill_folders  # noqa: F401 (re-exported)
 from ..hashing import skills_sha256
-from . import code, gate_eval, genie_rules, nocode
-from .base import AGENT_ID, CRITICALITY, SENSITIVITY, Caller, ServiceError, now_id
+from . import code, gate_eval, genie_rules, nocode, review
+from .base import AGENT_ID, CRITICALITY, SENSITIVITY, VERSION_COLUMNS, Caller, ServiceError, clean_note, gate_open_error, now_id
 from .git import GitHub, GitSettings, commit_message, proxy_transport
+from .browse import BrowseMixin
 from .nocode import NoCodeMixin
 from .userspace import UserSpaceMixin
 from .sql import Sql, loads
@@ -40,34 +42,30 @@ DEFAULT_POLICY = {
     "approver_group": "",
     "required_approvals": 1,
     "security_levels": ["general", "important", "secret"],
+    "approvers_required": False,  # true: every agent names its approvers in SPEC.md (validate ERROR without them)
+    # A development exception: these people may approve any request, their own included. Each such approval is
+    # recorded as an exception. Empty in a real setup; an admin sets it while testing alone.
+    "dev_approvers": [],
 }
+# Gate steps shown to the approver that do not reject a request: the content review and the quality evaluation
+ADVISORY = ("review", "evaluate")
+# A passed evaluation is reused for a deploy request only if it has the approver's report (runs before 0.1.0.dev18 have none)
+WITH_REVIEW = "AND (checks:review IS NOT NULL OR checks:review_error IS NOT NULL)"
+PRINCIPAL_TTL = 300  # seconds an approver lookup is kept (the server's Service lives as long as the app)
 # Gates whose code deploy runs in this server process now (a restart forgets them: see _reconcile_code_deploy)
 CODE_DEPLOYS: set[str] = set()
-# Agent Skills name rule: 1-64 lowercase letters, digits and hyphens; no hyphen at either end, no "--".
-SKILL_NAME = re.compile(r"^(?!.*--)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
-SECRET_PATTERNS = {
-    "Databricks 토큰": re.compile(r"dapi[0-9a-f]{32}"),
-    "GitHub 토큰": re.compile(r"gh[pousr]_[A-Za-z0-9]{36}"),
-    "AWS 키": re.compile(r"AKIA[0-9A-Z]{16}"),
-    "개인 키": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-}
-# .env files hold real values; .env.example and the like are templates (their content is still scanned)
-FORBIDDEN_FILES = re.compile(r"(^|/)(\.env(?!\.(example|sample|template|dist)$)(\..*)?|.*\.pem|id_rsa)$")
-# What each Gate (evaluate) step checks, shown in the Job description and in every run's output. The self-check
-# (validate) runs the same form steps without evaluate, integrity and record.
+# What each step checks, shown in the Job description and in every run's output. The self-check (validate) runs
+# the form steps; the Gate (evaluate) runs them again, then the review, the quality evaluation, integrity and record.
 CHECK_RULES = {
-    "format": "SPEC.md에 agent_id·name·build_type이 있고, service_criticality ∈ {low, medium, high}, "
-              "data_sensitivity ∈ {public, internal, confidential, personal}, description이 init 템플릿 문구가 아니다",
-    "skills": "agent/skills/<이름>/SKILL.md가 하나 이상. 이름은 소문자·숫자·하이픈 64자 이하(하이픈으로 시작·끝·연속 불가), "
-              "name = 폴더 이름, description 1~1024자 (Agent Skills 형식). init 템플릿(my-skill, 템플릿 description) 그대로면 반려",
-    "secrets": "모든 파일에서 " + "·".join(SECRET_PATTERNS) + " 패턴, 금지 파일(.env, *.pem, id_rsa)",
+    **{name: f"{info['title']}: {' · '.join(validate.rules_of(name))}" for name, info in validate.STEPS.items() if name != "definition"},
+    "definition": "Genie 정의 규칙(데이터 소스·개인정보 컬럼 숨김·예제 SQL·벤치마크 등 15개)의 ERROR 위반이 없고 준수율이 정책 기준(기본 90%) 이상",
+    "review": "내용 검토 (agentic): 모델이 도구로 모든 파일을 읽고 관리자 프롬프트(공통 + 종류별, 버전 관리)의 체크리스트를 판정해 "
+              "승인자용 리포트를 쓴다(항목별 판정·근거·사유·의견). 부적합은 반려하지 않고 승인자가 판단한다 (자동 승인은 하지 않음)",
     "record": "볼륨의 버전 zip이 등록 때 해시와 같다",
-    "project": "(코드 기반) agent.toml·app.yaml·pyproject.toml이 있고 server = agentbricks, framework = langgraph·openai. uv.lock을 권함",
-    "definition": "(노코드) Genie 정의 규칙(데이터 소스·개인정보 컬럼 숨김·예제 SQL·벤치마크 등 15개)의 ERROR 위반이 없고 "
-                  "준수율이 정책 기준(기본 90%) 이상",
-    "evaluate": "품질 평가 (앞 검사가 모두 통과했을 때). 스킬: evals/questions.yaml의 질문을 에이전트 지시·스킬을 준 모델이 답하고 "
+    "evaluate": "품질 평가 (리포트의 품질 섹션). 스킬: evals/questions.yaml의 질문을 에이전트 지시·스킬을 준 모델이 답하고 "
                 "판정 모델이 정답(expected)·판정 기준(guideline)과 비교, 정확도 ≥ 중요도별 기준(high 90%·medium 85%·low 80%). "
-                "노코드: Genie 벤치마크 정확도 ≥ 같은 기준, 운영 버전에서 GOOD이던 문항이 BAD면 회귀(0개 허용). 코드: 다음 단계(건너뜀)",
+                "노코드: Genie 벤치마크 정확도 ≥ 같은 기준, 운영 버전에서 GOOD이던 문항이 BAD면 회귀(0개 허용). 코드: 다음 단계(건너뜀). "
+                "기준 미달은 반려하지 않고 승인자가 판단한다 (자동 승인은 하지 않음)",
     "integrity": "(노코드) 평가가 끝날 때 개발용 Genie 정의가 요청 때 뜬 스냅샷과 같다. 다르면 stale(다시 요청)",
 }
 
@@ -95,7 +93,7 @@ class Config:
         return self.registry.split(".")[1]
 
 
-class Service(NoCodeMixin, UserSpaceMixin):
+class Service(NoCodeMixin, UserSpaceMixin, BrowseMixin):
     def __init__(self, config: Config, workspace: Any = None):
         from databricks.sdk import WorkspaceClient
 
@@ -194,6 +192,10 @@ class Service(NoCodeMixin, UserSpaceMixin):
             raise ServiceError(404, "not_found", f"등록된 에이전트가 없습니다: {agent_id}", "aops list")
         return row
 
+    def agent_approvers(self, agent_id: str) -> list[str]:
+        """The agent's named approvers from its SPEC (the last registered one, or the one it was made with)."""
+        return validate.approvers_of(loads((self.agent(agent_id) or {}).get("spec")) or {})
+
     def version_rows(self, agent_id: str) -> list[dict[str, Any]]:
         """Versions, newest first, with their Git copy when there is one (for the registry screen)."""
         self._agent_or_404(agent_id)
@@ -243,6 +245,57 @@ class Service(NoCodeMixin, UserSpaceMixin):
             row["body"] = {**DEFAULT_POLICY, **(loads(row.get("body")) or {})}
         return rows
 
+    # ── review prompts (the Gate's content review) ──────────────────────────
+
+    def review_prompt_rows(self) -> list[dict[str, Any]]:
+        try:
+            rows = self.sql.run(f"SELECT * FROM {self.sql.table('review_prompts')} ORDER BY kind, prompt_version DESC")
+        except Exception as error:  # a registry from before 0.1.0.dev18 (aops admin setup --only tables not run yet)
+            if "TABLE_OR_VIEW_NOT_FOUND" in str(error) and "review_prompts" in str(error):
+                return []
+            raise
+        for row in rows:
+            row["prompt_version"] = int(row["prompt_version"])
+        return rows
+
+    def active_prompts(self, rows: list[dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+        """{kind: {version, body, ...}} for the four kinds; a kind without rows uses aops's default (version 0)."""
+        rows = self.review_prompt_rows() if rows is None else rows
+        active = {r["kind"]: r for r in rows if r["status"] == "active"}
+        out = {}
+        for kind in review.KINDS:
+            row = active.get(kind)
+            out[kind] = ({"kind": kind, "version": row["prompt_version"], "body": row["body"], "note": row.get("note"),
+                          "created_by": row["created_by"], "created_at": row["created_at"]} if row else
+                         {"kind": kind, "version": 0, "body": review.default_prompt(kind), "note": "aops 기본 프롬프트", "created_by": "aops",
+                          "created_at": None})
+            out[kind]["checklist"] = review.checklist(out[kind]["body"])
+        return out
+
+    def review_prompts(self) -> dict[str, Any]:
+        rows = self.review_prompt_rows()
+        return {"active": self.active_prompts(rows), "history": [{k: v for k, v in r.items() if k != "body"} for r in rows]}
+
+    def set_review_prompt(self, caller: Caller, kind: str, body: str, note: str | None = None) -> dict[str, Any]:
+        """A new version of one prompt. Workspace admins only; the next evaluations use it and record its version."""
+        if not is_admin(caller):
+            raise ServiceError(403, "not_admin", "평가 프롬프트는 워크스페이스 관리자(admins)만 바꿉니다", "console 정책 → 평가 프롬프트")
+        body = (body or "").replace("\r\n", "\n").strip() + "\n"
+        rows = self.review_prompt_rows()
+        current = self.active_prompts(rows)
+        problems = review.prompt_problems(kind, body, {k: v["body"] for k, v in current.items()})
+        if problems:
+            raise ServiceError(400, "bad_prompt", "; ".join(problems), "console 정책 → 평가 프롬프트")
+        if current[kind]["body"] == body:
+            return current[kind]
+        version = max([r["prompt_version"] for r in rows if r["kind"] == kind] or [0]) + 1
+        self.sql.atomic([
+            (f"UPDATE {self.sql.table('review_prompts')} SET status = 'retired' WHERE kind = :k AND status = 'active'", {"k": kind}),
+            (f"INSERT INTO {self.sql.table('review_prompts')} VALUES (:k, :v, 'active', :b, :n, :by, current_timestamp())",
+             {"k": kind, "v": version, "b": body, "n": (note or "").strip() or None, "by": caller.email}),
+        ])
+        return self.active_prompts()[kind]
+
     def genie_check(self, caller: Caller, space_id: str) -> dict[str, Any]:
         """No-code self-check: the Gate's definition rules on a Genie space, right now (for reference only).
 
@@ -275,7 +328,8 @@ class Service(NoCodeMixin, UserSpaceMixin):
     def me(self, caller: Caller) -> dict[str, Any]:
         _, policy = self.policy()
         group = policy.get("approver_group")
-        roles = ["developer"] + (["approver"] if not group or group in caller.groups else []) + (["admin"] if is_admin(caller) else [])
+        approver = not group or group in caller.groups or self._dev_approver(caller, policy)
+        roles = ["developer"] + (["approver"] if approver else []) + (["admin"] if is_admin(caller) else [])
         return {"user": caller.email, "groups": caller.groups, "roles": roles}
 
     def set_policy(self, caller: Caller, changes: dict[str, Any]) -> dict[str, Any]:
@@ -286,8 +340,12 @@ class Service(NoCodeMixin, UserSpaceMixin):
         for key, values in allowed.items():
             if key in changes and changes[key] not in values:
                 raise ServiceError(400, "bad_policy", f"{key}는 {', '.join(sorted(values))} 중 하나입니다")
+        if "approvers_required" in changes:
+            changes["approvers_required"] = bool(changes["approvers_required"])
+        if "dev_approvers" in changes:
+            changes["dev_approvers"] = dev_approver_list(changes["dev_approvers"])
         version, current = self.policy()
-        body = {**current, **{k: v for k, v in changes.items() if k in (*allowed, "approver_group")}}
+        body = {**current, **{k: v for k, v in changes.items() if k in (*allowed, "approver_group", "approvers_required", "dev_approvers")}}
         if body == current and version:
             return self.policies()[0]
         new_version = version + 1
@@ -309,7 +367,8 @@ class Service(NoCodeMixin, UserSpaceMixin):
     # ── register ────────────────────────────────────────────────────────────
 
     def register(self, caller: Caller, agent_id: str, data: bytes, version: str | None = None,
-                 bump: str | None = None, source: dict[str, Any] | None = None) -> dict[str, Any]:
+                 bump: str | None = None, source: dict[str, Any] | None = None, note: str | None = None) -> dict[str, Any]:
+        note = clean_note(note)
         if not AGENT_ID.match(agent_id):
             raise ServiceError(400, "bad_agent_id", "에이전트 이름은 영문 소문자·숫자·하이픈 63자 이하입니다 (첫 글자는 영문 소문자·숫자)", "aops register")
         try:
@@ -374,7 +433,7 @@ class Service(NoCodeMixin, UserSpaceMixin):
                 {**fields, "id": agent_id, "owner": spec.get("owner") or None}))
         harness = re.search(r'harness\s*=\s*"(\w+)"', files["aops.toml"].decode("utf-8"))
         statements.append((
-            f"INSERT INTO {self.sql.table('agent_versions')} VALUES (:id, :v, 'registered', :sha, :path, :size, :skills, "
+            f"INSERT INTO {self.sql.table('agent_versions')} {VERSION_COLUMNS} VALUES (:id, :v, 'registered', :sha, :path, :size, :skills, "
             ":harness, NULL, parse_json(:spec), :by, current_timestamp())",
             {"id": agent_id, "v": new_version, "sha": sha, "path": path, "size": len(data), "skills": skills_sha256(hashes),
              "harness": harness.group(1) if harness else None, "spec": spec, "by": caller.email}))
@@ -383,7 +442,7 @@ class Service(NoCodeMixin, UserSpaceMixin):
                                {"id": agent_id, "v": new_version, "alias": alias, "uc": uc_name, "sha": hashes[alias],
                                 "src": f"agent/skills/{alias}"}))
         statements.append(self._event_statement(agent_id, new_version, "register", caller.email,
-                                                {"artifact_path": path, "skills": published, "first": not existing, **(source or {})}))
+                                                {"artifact_path": path, "skills": published, "first": not existing, "note": note, **(source or {})}))
         try:
             self.sql.atomic(statements)
         except Exception:
@@ -392,6 +451,7 @@ class Service(NoCodeMixin, UserSpaceMixin):
             except Exception:
                 pass
             raise
+        self.set_version_note(agent_id, new_version, note)
         result = {**self.version(agent_id, new_version), "skills": self.version_skills(agent_id, new_version)}
         # 4. Git mirror (when the policy has one): never fails the registration
         synced = self.sync_git(agent_id, caller.email, known={new_version: files})
@@ -399,6 +459,17 @@ class Service(NoCodeMixin, UserSpaceMixin):
             records, error = synced
             result["git"] = records.get(new_version) or {"status": "failed", "error": error}
         return result
+
+    def set_version_note(self, agent_id: str, version: str, note: str | None) -> None:
+        """The registration note on the version row. Apart from the registration (whose record has it too): a registry
+        whose agent_versions has no note column yet (admin setup --only tables not run) still registers."""
+        if not note:
+            return
+        try:
+            self.sql.run(f"UPDATE {self.sql.table('agent_versions')} SET note = :n WHERE agent_id = :a AND version = :v",
+                         {"n": note, "a": agent_id, "v": version})
+        except Exception:
+            pass
 
     # ── Git mirror (optional) ───────────────────────────────────────────────
 
@@ -553,7 +624,7 @@ class Service(NoCodeMixin, UserSpaceMixin):
                 raise ServiceError(403, "not_owner", "담당자·담당 팀만 개발용 Genie를 점검할 수 있습니다", "aops validate")
             genie = self.genie_agent(agent_id) or {}
             files = nocode.bundle(agent_id, self._folder_spec(genie, agent), self._dev_definition(genie))
-            steps = nocode.check_steps(files, self.policy()[1], spec_step(files, "no_code"))
+            steps = nocode.check_steps(files, self.policy()[1], self.principal_exists)
             source = f"개발용 Genie {genie.get('dev_space_id')} (지금 정의와 폴더의 SPEC.md)"
         else:
             if data is not None:
@@ -573,7 +644,7 @@ class Service(NoCodeMixin, UserSpaceMixin):
                 target = self._version_or_latest(agent_id, version)
                 files = package.read(self.w.files.download(target["artifact_path"]).contents.read())
                 source = f"등록 버전 {target['version']}"
-            steps = check_agent(files)
+            steps = check_agent(files, self.policy()[1], self.principal_exists)
         spec = package.front_matter(files.get("SPEC.md", b"").decode("utf-8", "replace"))
         return {"agent_id": agent_id, "build_type": (agent or {}).get("build_type") or str(spec.get("build_type") or "skill").replace("-", "_"),
                 "source": source, "status": "passed" if all(s["status"] != "failed" for s in steps) else "failed",
@@ -612,6 +683,7 @@ class Service(NoCodeMixin, UserSpaceMixin):
             raise ServiceError(404, "not_found", "평가 실행이 없습니다")
         row["steps"] = loads(row.get("steps")) or []
         row["checks"] = loads(row.get("checks")) or {}
+        row["review"] = row["checks"].get("review")
         row["policy_version"] = int(row["policy_version"])
         if results:
             row["results"] = self.eval_results(run_id)
@@ -624,11 +696,18 @@ class Service(NoCodeMixin, UserSpaceMixin):
         return rows
 
     def run_evaluation(self, run_id: str) -> dict[str, Any]:
-        """Inside the evaluate Job: the form checks again, then the quality evaluation, recorded with its results."""
+        """Inside the evaluate Job, recorded with its results and the approver's report:
+
+        1. the self-check rules again (a failed ERROR rule rejects the request under a mandatory policy)
+        2. `review`: the content review (aops.dbx.review), advisory
+        3. `evaluate`: the quality evaluation (eval set or Genie benchmarks), advisory
+        4. `integrity` (no-code) and `record`: the content is what was requested
+        """
         run = self.evaluation(run_id)
         self.sql.run(f"UPDATE {self.sql.table('validation_runs')} SET status = 'running' WHERE validation_run_id = :r", {"r": run_id})
         steps: list[dict[str, Any]] = []
         results: list[dict[str, Any]] = []
+        checks: dict[str, Any] = {}
         report: dict[str, Any] = {"agent_id": run["agent_id"], "version": run["version"], "artifact_path": None,
                                   "sha256": None, "files": []}
         try:
@@ -643,28 +722,44 @@ class Service(NoCodeMixin, UserSpaceMixin):
             spec = package.front_matter(files.get("SPEC.md", b"").decode("utf-8", "replace"))
             _, policy = self.policy()
             stale = benchmarked = False
-            kind = agent.get("build_type")
-            steps = nocode.check_steps(files, policy, spec_step(files, "no_code")) if kind == "no_code" else check_agent(files)
+            kind = agent.get("build_type") or validate.kind_of(files)
+            steps = (nocode.check_steps(files, policy, self.principal_exists) if kind == "no_code"
+                     else check_agent(files, policy, self.principal_exists))
             if any(s["status"] == "failed" for s in steps):
+                steps.append({"name": "review", "status": "skipped", "detail": "형식 검사(ERROR)가 실패해 내용 검토를 하지 않았습니다"})
                 steps.append({"name": "evaluate", "status": "skipped", "detail": "앞 검사가 실패해 평가를 돌리지 않았습니다"})
-            elif kind == "no_code":
-                # Benchmarks run on the dev space, so they speak for this content only while the dev definition is it
-                genie = self.genie_agent(run["agent_id"]) or {}
-                live = genie_rules.definition_hash(self._dev_definition(genie))
-                if live == genie_rules.definition_hash(nocode.definition_of(files)):
-                    step, results = gate_eval.evaluate_genie(self.w, genie["dev_space_id"], spec, policy, self._eval_baseline(run["agent_id"]))
-                    steps.append(step)
-                    benchmarked = True
-                elif snapshot:
-                    steps.append({"name": "evaluate", "status": "skipped", "detail": "요청한 뒤 개발용 정의가 바뀌어 벤치마크를 돌리지 않았습니다"})
-                else:
-                    steps.append({"name": "evaluate", "status": "skipped",
-                                  "detail": "개발용 Genie가 지금 이 버전과 달라 벤치마크를 돌리지 않았습니다 (이 버전이 운영에 나갈 때의 평가를 따릅니다)"})
-            elif kind == "code" or str(spec.get("build_type")) == "code":
-                steps.append(gate_eval.skipped_for_code())
             else:
-                step, results = gate_eval.evaluate_skill(self.w, files, spec, policy)
-                steps.append(step)
+                # the content review: a model reads every file against the admin's prompts (the approver's report).
+                # If it cannot run, the approver is told so; the request is not rejected for it (and not auto-approved).
+                try:
+                    checks["review"] = review.review(self.w, files, kind, self.active_prompts(), policy, run["agent_id"])
+                    steps.append(review.step(checks["review"]))
+                except Exception as error:  # ReviewError, or anything else on the way (prompts, a tool): still the approver's call
+                    error = error if isinstance(error, review.ReviewError) else f"{type(error).__name__}: {str(error)[:300]}"
+                    checks["review_error"] = str(error)
+                    steps.append({"name": "review", "status": "failed", "advisory": True,
+                                  "detail": f"내용 검토를 하지 못했습니다: {error}. 승인자가 파일을 직접 확인하거나 다시 평가를 요청합니다"})
+                if kind == "no_code":
+                    # Benchmarks run on the dev space, so they speak for this content only while the dev definition is it
+                    genie = self.genie_agent(run["agent_id"]) or {}
+                    live = genie_rules.definition_hash(self._dev_definition(genie))
+                    if live == genie_rules.definition_hash(nocode.definition_of(files)):
+                        step, results = gate_eval.evaluate_genie(self.w, genie["dev_space_id"], spec, policy, self._eval_baseline(run["agent_id"]))
+                        steps.append(step)
+                        benchmarked = True
+                    elif snapshot:
+                        steps.append({"name": "evaluate", "status": "skipped", "detail": "요청한 뒤 개발용 정의가 바뀌어 벤치마크를 돌리지 않았습니다"})
+                    else:
+                        steps.append({"name": "evaluate", "status": "skipped",
+                                      "detail": "개발용 Genie가 지금 이 버전과 달라 벤치마크를 돌리지 않았습니다 (이 버전이 운영에 나갈 때의 평가를 따릅니다)"})
+                elif kind == "code":
+                    steps.append(gate_eval.skipped_for_code())
+                else:
+                    step, results = gate_eval.evaluate_skill(self.w, files, spec, policy)
+                    steps.append(step)
+            for s in steps:
+                if s["name"] in ADVISORY:
+                    s["advisory"] = True  # shown to the approver; it does not reject the request
             if kind == "no_code" and (snapshot or benchmarked):  # after the benchmarks: the dev definition must not have moved
                 integrity = self.integrity_step(run["agent_id"], files)
                 steps.append(integrity)
@@ -673,24 +768,26 @@ class Service(NoCodeMixin, UserSpaceMixin):
             what = "스냅샷이 요청 때" if snapshot else "버전 zip이 등록 때"
             steps.append({"name": "record", "status": "passed" if same else "failed",
                           "detail": f"{what} 해시와 같습니다" if same else f"{what} 해시와 다릅니다"})
-            status = "stale" if stale else "passed" if all(s["status"] != "failed" for s in steps) else "failed"
-            reason = None if status == "passed" else "; ".join(s["detail"] for s in steps if s["status"] == "failed")
+            blocking = [s for s in steps if not s.get("advisory")]
+            status = "stale" if stale else "passed" if all(s["status"] != "failed" for s in blocking) else "failed"
+            reason = None if status == "passed" else "; ".join(s["detail"] for s in blocking if s["status"] == "failed")
         except gate_eval.EvaluationError as error:
             status, reason = "error", str(error)
         except Exception as error:
             status, reason = "error", f"{type(error).__name__}: {error}"
         statements = [(
-            f"UPDATE {self.sql.table('validation_runs')} SET status = :s, steps = parse_json(:steps), failure_reason = :why, "
-            "ended_at = current_timestamp() WHERE validation_run_id = :r",
-            {"s": status, "steps": steps, "why": reason, "r": run_id})]
+            f"UPDATE {self.sql.table('validation_runs')} SET status = :s, steps = parse_json(:steps), checks = parse_json(:checks), "
+            "failure_reason = :why, ended_at = current_timestamp() WHERE validation_run_id = :r",
+            {"s": status, "steps": steps, "checks": checks, "why": reason, "r": run_id})]
         statements += [(f"INSERT INTO {self.sql.table('eval_results')} VALUES (:r, :a, :q, :text, :as, parse_json(:why), :exp, :gen, current_timestamp())",
                         {"r": run_id, "a": run["agent_id"], "q": r["question_id"], "text": r.get("question"), "as": r["assessment"],
                          "why": r.get("reasons") or [], "exp": r.get("expected"), "gen": (r.get("generated") or "")[:20000]})
                        for r in results]
+        verdict = (checks.get("review") or {}).get("verdict")
         statements.append(self._event_statement(run["agent_id"], run["version"], "evaluate", run["started_by"],
-                                                {"status": status, "validation_run_id": run_id, "questions": len(results)}))
+                                                {"status": status, "validation_run_id": run_id, "questions": len(results), "review": verdict}))
         self.sql.atomic(statements)
-        return {**report, "status": status, "reason": reason, "steps": steps, "results": results}
+        return {**report, "status": status, "reason": reason, "steps": steps, "results": results, "review": checks.get("review")}
 
     run_validation = run_evaluation  # the Job of servers before 0.1.0.dev16 calls it by this name
 
@@ -720,8 +817,10 @@ class Service(NoCodeMixin, UserSpaceMixin):
         if open_gate and open_gate["version"] == target["version"]:
             return self.advance(open_gate["gate_id"])  # the same request again: keep following it
         if open_gate:
-            raise ServiceError(409, "gate_open", f"진행 중인 배포 요청이 있습니다 ({open_gate['version']}, {open_gate['gate_id']})", "aops deploy")
+            raise gate_open_error(open_gate)
         policy_version, policy = self.policy()
+        approvers = validate.approvers_of(loads(target.get("spec")) or {})
+        self.check_someone_approves(caller, approvers, policy)
         production = self.production(agent_id)
         upgrade = upgrade_type(production["current_version"] if production else None, target["version"])
         gate_id = now_id()
@@ -732,7 +831,8 @@ class Service(NoCodeMixin, UserSpaceMixin):
              "p": policy_version, "vm": policy["validation_mode"], "am": policy["approval_mode"],
              "ch": policy["approval_channel"], "n": int(policy["required_approvals"])},
         )
-        self.event(agent_id, target["version"], "gate_requested", caller.email, {"gate_id": gate_id, "upgrade_type": upgrade})
+        self.event(agent_id, target["version"], "gate_requested", caller.email,
+                   {"gate_id": gate_id, "upgrade_type": upgrade, "approvers": approvers})
 
         passed = self._passed_evaluation(agent_id, target["version"], policy_version)
         if policy["validation_mode"] == "exempt" or passed:
@@ -746,7 +846,8 @@ class Service(NoCodeMixin, UserSpaceMixin):
     def _open_gate(self, agent_id: str) -> dict[str, Any] | None:
         """The agent's request that is still moving: validating, waiting for approval, or deploying."""
         return self.sql.one(
-            f"SELECT g.gate_id, g.version FROM {self.sql.table('release_gates')} g LEFT JOIN {self.sql.table('deployments')} d "
+            f"SELECT g.gate_id, g.version, g.decision, g.requester, d.status AS deployment_status FROM {self.sql.table('release_gates')} g "
+            f"LEFT JOIN {self.sql.table('deployments')} d "
             "ON d.deployment_id = g.deployment_id WHERE g.agent_id = :a AND (g.decision IN ('validating', 'pending_approval') "
             "OR (g.decision = 'approved' AND (d.status IS NULL OR d.status = 'running')))", {"a": agent_id})
 
@@ -757,6 +858,7 @@ class Service(NoCodeMixin, UserSpaceMixin):
         # by content, not only by number: a no-code version number is only proposed until it is deployed
         return self.sql.one(f"SELECT validation_run_id FROM {self.sql.table('validation_runs')} WHERE agent_id = :a AND version = :v "
                             "AND source_sha256 = :sha AND policy_version = :p AND status = 'passed' AND mode = 'job' "
+                            f"{WITH_REVIEW} "
                             "ORDER BY started_at DESC LIMIT 1",
                             {"a": agent_id, "v": version, "sha": target["source_sha256"], "p": policy_version})
 
@@ -792,7 +894,15 @@ class Service(NoCodeMixin, UserSpaceMixin):
 
     def _after_gate(self, gate_id: str, run_id: str | None, failed: str | None = None) -> None:
         gate = self.gate(gate_id)
-        approve, why = (False, failed) if failed else self._auto_approval(gate)  # a failed check always waits for a person
+        flagged = None if failed else self._flagged(run_id)
+        named = gate.get("approvers") or []
+        # a failed check, a review or quality finding, or named approvers: a person decides
+        if failed or flagged:
+            approve, why = False, failed or flagged
+        elif named:
+            approve, why = False, f"지정 승인자 승인 필요: {', '.join(named)} (리포트를 보고 승인)"
+        else:
+            approve, why = self._auto_approval(gate)
         moved = self.sql.update(f"UPDATE {self.sql.table('release_gates')} SET decision = 'pending_approval', validation_run_id = :r, "
                                 "decision_reason = :why, updated_at = current_timestamp() WHERE gate_id = :g AND decision = 'validating'",
                                 {"g": gate_id, "r": run_id, "why": None if approve else why})
@@ -801,6 +911,23 @@ class Service(NoCodeMixin, UserSpaceMixin):
         self.sql.run(f"INSERT INTO {self.sql.table('approvals')} VALUES (:id, :g, 'policy:auto', 'approve', :c, "
                      "'policy', current_timestamp())", {"id": now_id(), "g": gate_id, "c": why})
         self._approved(gate, "policy:auto")
+
+    def _flagged(self, run_id: str | None) -> str | None:
+        """Why the report needs a person: a content review item that fails, or quality below the minimum."""
+        if not run_id:
+            return None
+        run = self.evaluation(run_id)
+        parts = []
+        for s in run["steps"]:
+            if not s.get("advisory"):
+                continue
+            if s["name"] == "review" and s["status"] == "failed":
+                parts.append("내용 검토 부적합" if s.get("verdict") == "fail" else "내용 검토를 하지 못함")
+            elif s["name"] == "review" and s.get("recommendation") in ("changes", "reject"):
+                parts.append(f"검토 모델 권고 {s['recommendation']}")
+            elif s["status"] == "failed":
+                parts.append("품질 평가 기준 미달" if s["name"] == "evaluate" else s["name"])
+        return "승인자 판단 필요: " + ", ".join(parts) + " (리포트 확인)" if parts else None
 
     def _auto_approval(self, gate: dict[str, Any]) -> tuple[bool, str | None]:
         """Whether the policy approves this request by itself, and why (or why a person has to)."""
@@ -832,27 +959,43 @@ class Service(NoCodeMixin, UserSpaceMixin):
             clauses.append("g.requester = :me")
             params["me"] = caller.email
         if to_approve:
-            _, policy = self.policy()
-            if policy["approver_group"] and policy["approver_group"] not in caller.groups:
-                return []
-            clauses.append("g.decision = 'pending_approval' AND g.requester <> :me")
-            params["me"] = caller.email
+            clauses.append("g.decision = 'pending_approval'")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        return self.sql.run(
+        cut = limit
+        if to_approve:  # filtered by named approvers below, so read every waiting request first
+            limit = 1000
+        rows = self.sql.run(
             f"SELECT g.*, d.status AS deployment_status, (SELECT count(*) FROM {self.sql.table('approvals')} a "
-            f"WHERE a.gate_id = g.gate_id AND a.decision = 'approve') AS approvals FROM {self.sql.table('release_gates')} g "
+            f"WHERE a.gate_id = g.gate_id AND a.decision = 'approve') AS approvals, (SELECT max(v.checks:review:verdict::string) FROM "
+            f"{self.sql.table('validation_runs')} v WHERE v.validation_run_id = g.validation_run_id) AS review_verdict "
+            f"FROM {self.sql.table('release_gates')} g "
             f"LEFT JOIN {self.sql.table('deployments')} d ON d.deployment_id = g.deployment_id {where} "
             f"ORDER BY g.requested_at DESC LIMIT {int(limit)}", params)
+        if rows:  # each request's named approvers (from its gate_requested record)
+            named = self.sql.run(f"SELECT detail:gate_id::string AS gate_id, to_json(detail:approvers) AS approvers FROM {self.sql.table('agent_events')} "
+                                 "WHERE event_type = 'gate_requested' AND detail:gate_id::string IN ("
+                                 + ", ".join(f":g{i}" for i in range(len(rows))) + ")", {f"g{i}": r["gate_id"] for i, r in enumerate(rows)})
+            by_gate = {r["gate_id"]: loads(r.get("approvers")) or [] for r in named}
+            for row in rows:
+                row["approvers"] = by_gate.get(row["gate_id"], [])
+        if to_approve:
+            _, policy = self.policy()
+            dev = self._dev_approver(caller, policy)
+            rows = [r for r in rows if dev or (r["requester"] != caller.email and self._is_approver(caller, r, policy))]
+        return rows[:cut]
 
     def _check_approver(self, caller: Caller, gate: dict[str, Any], action: str) -> None:
         if gate["decision"] != "pending_approval":
             raise ServiceError(409, "not_pending", f"승인 대기 중인 요청이 아닙니다 ({gate['decision']})", f"aops {action}")
+        _, policy = self.policy()
+        if self._dev_approver(caller, policy):
+            return  # the development exception (policy dev_approvers): recorded as such on approval
         if caller.email == gate["requester"]:
             hint = "요청자 본인은 승인할 수 없습니다" if action == "approve" else "요청자 본인은 반려 대신 aops deploy --cancel로 취소합니다"
             raise ServiceError(403, "self_approval", hint, f"aops {action}")
-        _, policy = self.policy()
-        if policy["approver_group"] and policy["approver_group"] not in caller.groups:
-            raise ServiceError(403, "not_approver", f"승인 그룹({policy['approver_group']})만 할 수 있습니다", f"aops {action}")
+        if not self._is_approver(caller, gate, policy):
+            who = ", ".join(gate.get("approvers") or []) or f"승인 그룹 {policy['approver_group']}"
+            raise ServiceError(403, "not_approver", f"이 요청은 지정 승인자({who})만 승인·반려할 수 있습니다", f"aops {action}")
 
     def reject(self, caller: Caller, gate_id: str, reason: str) -> dict[str, Any]:
         gate = self.gate(gate_id)
@@ -878,21 +1021,27 @@ class Service(NoCodeMixin, UserSpaceMixin):
             self.event(gate["agent_id"], gate["version"], "gate_canceled", caller.email, {"gate_id": gate_id, "was": gate["decision"]})
         return self.gate(gate_id)
 
-    def approve(self, caller: Caller, gate_id: str, comment: str | None = None) -> dict[str, Any]:
+    def approve(self, caller: Caller, gate_id: str, comment: str | None = None, seen_run: str | None = None) -> dict[str, Any]:
+        """Approve after reading the report: with a report on the request, the approver names the run they read."""
         gate = self.gate(gate_id)
         self._check_approver(caller, gate, "approve")
+        if gate.get("validation_run_id") and seen_run != gate["validation_run_id"]:
+            raise ServiceError(409, "report_not_read", "이 요청의 평가 리포트를 확인한 뒤 승인하세요 (본 리포트의 validation_run_id를 함께 보냅니다)",
+                               "aops approve")
         if self.sql.one(f"SELECT 1 AS x FROM {self.sql.table('approvals')} WHERE gate_id = :g AND approver = :by AND decision = 'approve'",
                         {"g": gate_id, "by": caller.email}):
             raise ServiceError(409, "already_approved", "이미 승인했습니다. 필요한 승인 수는 서로 다른 승인자로 채웁니다", "aops approve")
+        exception = self.approval_exception(caller, gate)
+        note = (f"[개발 예외 승인: 정책 dev_approvers{', 본인 요청' if caller.email == gate['requester'] else ', 지정 승인자 아님'}] " if exception else "") + (comment or "")
         self.sql.run(f"INSERT INTO {self.sql.table('approvals')} VALUES (:id, :g, :by, 'approve', :c, 'console', current_timestamp())",
-                     {"id": now_id(), "g": gate_id, "by": caller.email, "c": comment})
+                     {"id": now_id(), "g": gate_id, "by": caller.email, "c": note or None})
         approved = self.sql.one(f"SELECT count(DISTINCT approver) AS n FROM {self.sql.table('approvals')} WHERE gate_id = :g AND decision = 'approve'",
                                 {"g": gate_id})
         if int(approved["n"]) >= int(gate["required_approvals"]):
-            self._approved(gate, caller.email)
+            self._approved(gate, caller.email, "dev_approver" if exception else None)
         return self.gate(gate_id)
 
-    def _approved(self, gate: dict[str, Any], actor: str) -> None:
+    def _approved(self, gate: dict[str, Any], actor: str, exception: str | None = None) -> None:
         deployment_id = now_id()
         if not self.sql.update(f"UPDATE {self.sql.table('release_gates')} SET decision = 'approved', deployment_id = :d, "
                                "updated_at = current_timestamp() WHERE gate_id = :g AND decision = 'pending_approval'",
@@ -904,7 +1053,7 @@ class Service(NoCodeMixin, UserSpaceMixin):
         self.sql.run(f"INSERT INTO {self.sql.table('deployments')} VALUES (:d, :g, :a, :v, 'production', NULL, NULL, 'running', NULL, "
                      "NULL, current_timestamp(), NULL)", {"d": deployment_id, "g": gate["gate_id"], "a": gate["agent_id"], "v": gate["version"]})
         self.event(gate["agent_id"], gate["version"], "gate_approved", actor,
-                   {"gate_id": gate["gate_id"], "approval_mode": gate["approval_mode"]})
+                   {"gate_id": gate["gate_id"], "approval_mode": gate["approval_mode"], **({"exception": exception} if exception else {})})
         if is_code:
             # `agentbricks deploy` drives the databricks CLI, which only works here (inside the app), not in a Job
             threading.Thread(target=self._code_deploy_thread, args=(gate["gate_id"],), daemon=True).start()
@@ -1063,7 +1212,85 @@ class Service(NoCodeMixin, UserSpaceMixin):
                                  "WHERE gate_id = :g AND decision = 'approve'", {"g": gate_id})
         row["approvals"] = int(approvals["n"]) if approvals else 0
         row["approved_by"] = approvals.get("last") if approvals else None
+        row["approvers"] = self.gate_approvers(gate_id)
         return row
+
+    def gate_approvers(self, gate_id: str) -> list[str]:
+        """The approvers named in SPEC.md when the request was made (kept in its gate_requested record)."""
+        row = self.sql.one(f"SELECT detail FROM {self.sql.table('agent_events')} WHERE event_type = 'gate_requested' "
+                           "AND detail:gate_id::string = :g LIMIT 1", {"g": gate_id})
+        detail = loads(row.get("detail")) if row else None
+        return list((detail or {}).get("approvers") or [])
+
+    def principal_exists(self, principal: str) -> bool | None:
+        """Is this approver a user or group of the workspace? None when the server cannot tell (no rights to list)."""
+        cache = self.__dict__.setdefault("_principals", {})  # principal: (answer, when). The server's Service lives long
+        hit = cache.get(principal)
+        if hit and time.time() - hit[1] < PRINCIPAL_TTL:
+            return hit[0]
+        try:
+            if principal.lower().startswith("group:"):
+                name = principal[6:].strip().replace('"', "")
+                found = any(True for _ in self.w.groups.list(filter=f'displayName eq "{name}"', attributes="displayName"))
+            else:
+                email = principal.replace('"', "")
+                found = any(True for _ in self.w.users.list(filter=f'userName eq "{email}"', attributes="userName"))
+        except Exception:
+            return None  # not kept: the next check asks again
+        cache[principal] = (found, time.time())
+        return found
+
+    def search_directory(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Workspace users and groups whose name or email contains the query, to pick approvers from."""
+        q = (query or "").strip().replace('"', "")
+        if len(q) < 2:
+            return []
+        out = []
+        try:
+            for user in self.w.users.list(filter=f'userName co "{q}" or displayName co "{q}"', attributes="userName,displayName,active",
+                                          count=limit):
+                if user.user_name and user.active is not False:
+                    out.append({"principal": user.user_name, "kind": "user", "name": user.display_name or user.user_name})
+                if len(out) >= limit:
+                    break
+            for group in self.w.groups.list(filter=f'displayName co "{q}"', attributes="displayName", count=limit):
+                if group.display_name:
+                    out.append({"principal": f"group:{group.display_name}", "kind": "group", "name": group.display_name})
+                if len(out) >= 2 * limit:
+                    break
+        except Exception as error:
+            raise ServiceError(502, "directory_failed", f"워크스페이스 사용자·그룹을 찾지 못했습니다: {type(error).__name__}. "
+                               "승인자를 이메일이나 group:<그룹>으로 직접 적으세요") from error
+        return out
+
+    def _is_approver(self, caller: Caller, gate: dict[str, Any], policy: dict[str, Any]) -> bool:
+        """The named approvers when the request has them; otherwise the policy's approver group (or anyone)."""
+        named = gate.get("approvers") or []
+        if named:
+            groups = {g.lower() for g in caller.groups}
+            return any(a.lower() == caller.email.lower() or (a.lower().startswith("group:") and a[6:].strip().lower() in groups) for a in named)
+        return not policy["approver_group"] or policy["approver_group"] in caller.groups
+
+    def check_someone_approves(self, caller: Caller, approvers: list[str], policy: dict[str, Any]) -> None:
+        """Named approvers that are only the requester: nobody could approve the request (it would wait for ever)."""
+        if approvers and not self._dev_approver(caller, policy) and all(
+                not a.lower().startswith("group:") and a.lower() == caller.email.lower() for a in approvers):
+            raise ServiceError(409, "no_other_approver", "지정 승인자가 요청자 본인뿐이라 승인할 사람이 없습니다. SPEC.md approvers에 다른 사람을 더하세요",
+                               "aops deploy")
+
+    @staticmethod
+    def _dev_approver(caller: Caller, policy: dict[str, Any]) -> bool:
+        return caller.email.lower() in {a.lower() for a in policy.get("dev_approvers") or []}
+
+    def approval_exception(self, caller: Caller, gate: dict[str, Any], policy: dict[str, Any] | None = None) -> bool:
+        """Would this approval only stand on the development exception (own request, or not a named approver)?"""
+        policy = policy or self.policy()[1]
+        return self._dev_approver(caller, policy) and (caller.email == gate["requester"] or not self._is_approver(caller, gate, policy))
+
+    def can_approve(self, caller: Caller, gate: dict[str, Any]) -> bool:
+        policy = self.policy()[1]
+        return gate["decision"] == "pending_approval" and (
+            self._dev_approver(caller, policy) or (caller.email != gate["requester"] and self._is_approver(caller, gate, policy)))
 
     def _set_gate(self, gate_id: str, **values: Any) -> None:
         sets = ", ".join(f"{k} = :{k}" for k in values)
@@ -1210,7 +1437,7 @@ class Service(NoCodeMixin, UserSpaceMixin):
         if kind == "evaluate":
             description = ("aops 배포 전 평가(Gate). 배포 요청과 aops evaluate마다 aops 서버가 실행합니다.\n"
                            + "\n".join(f"- {name}: {rule}" for name, rule in CHECK_RULES.items())
-                           + f"\n{code} (형식 check_agent · 노코드 nocode.check_steps, 평가 gate_eval)\n"
+                           + f"\n{code} (형식 aops.validate, 내용 검토 aops.dbx.review, 품질 gate_eval)\n"
                            f"결과: {registry}.validation_runs.steps, 문항별 {registry}.eval_results, 실행 출력에 단계별 결과")
         else:
             description = ("aops 운영 반영. 승인된 배포 요청마다 aops 서버가 실행합니다.\n"
@@ -1260,16 +1487,6 @@ def uc_skill_id(agent_id: str, alias: str) -> str:
     return f"{agent_id}__{alias}".lower()
 
 
-def skill_folders(files: dict[str, bytes]) -> dict[str, dict[str, bytes]]:
-    """agent/skills/<alias>/… → {alias: {relative path: content}} for folders that hold SKILL.md."""
-    out: dict[str, dict[str, bytes]] = {}
-    for rel, data in files.items():
-        parts = rel.split("/")
-        if len(parts) >= 4 and parts[0] == "agent" and parts[1] == "skills":
-            out.setdefault(parts[2], {})["/".join(parts[3:])] = data
-    return {alias: content for alias, content in out.items() if "SKILL.md" in content}
-
-
 def next_version(existing: list[str], bump: str | None) -> str:
     if not existing:
         return "1.0.0"
@@ -1298,73 +1515,33 @@ def pick(value: str | None, allowed: set[str], default: str) -> str:
     return value if value in allowed else default
 
 
-def check_agent(files: dict[str, bytes]) -> list[dict[str, Any]]:
-    """The validate steps for the kind of agent in SPEC.md (skill or code)."""
-    spec = package.front_matter(files.get("SPEC.md", b"").decode("utf-8", "replace"))
-    if str(spec.get("build_type", "skill")).replace("-", "_") == "code":
-        return check_code_agent(files)
-    return check_skill_agent(files)
+def check_agent(files: dict[str, bytes], policy: dict[str, Any] | None = None, lookup: Any = None) -> list[dict[str, Any]]:
+    """The validate checklist for the kind of agent in SPEC.md (skill or code). See aops.validate."""
+    return validate.check(files, policy=policy, lookup=lookup)
 
 
 def check_code_agent(files: dict[str, bytes]) -> list[dict[str, Any]]:
-    """Code agents: the same SPEC format and secrets checks, and an Agent Bricks project instead of skills."""
-    steps = [s for s in check_skill_agent(files) if s["name"] != "skills"]
-    steps.insert(1, code.check_project(files))
-    return steps
-
-
-def spec_step(files: dict[str, bytes], build_type: str | None = None) -> dict[str, Any]:
-    """The `format` step: SPEC.md has its required fields and allowed values (and, if given, this build type)."""
-    spec = package.front_matter(files.get("SPEC.md", b"").decode("utf-8", "replace"))
-    missing = [k for k in ("agent_id", "name", "build_type") if not spec.get(k)]
-    bad = [k for k, allowed in (("service_criticality", CRITICALITY), ("data_sensitivity", SENSITIVITY)) if spec.get(k) not in allowed]
-    problems = [f"빈 항목 {', '.join(missing)}"] if missing else []
-    problems += [f"허용되지 않는 값 {', '.join(f'{k}={spec.get(k)!r}' for k in bad)}"] if bad else []
-    if build_type and spec.get("build_type") and spec["build_type"].replace("-", "_") != build_type:
-        problems.append(f"build_type이 {build_type}가 아닙니다 ({spec['build_type']})")
-    if build_type == "no_code" and not str(spec.get("description") or "").strip():  # it becomes the Genie description
-        problems.append("description이 비어 있습니다 (이 에이전트가 하는 일을 적으세요)")
-    elif str(spec.get("description") or "").strip() == SPEC_DESCRIPTION:
-        problems.append("description이 템플릿 그대로입니다 (이 에이전트가 하는 일을 적으세요)")
-    return {"name": "format", "status": "failed" if problems else "passed",
-            "detail": "SPEC.md: " + "; ".join(problems) if problems else "SPEC.md 필수 항목과 값이 맞습니다"}
+    return validate.check(files, "code")
 
 
 def check_skill_agent(files: dict[str, bytes]) -> list[dict[str, Any]]:
-    """The validate steps for a skill agent: format, skills, secrets. An untouched init template fails."""
-    steps: list[dict[str, Any]] = [spec_step(files)]
+    return validate.check(files, "skill")
 
-    problems = []
-    skills = skill_folders(files)
-    if not skills:
-        problems.append("agent/skills 아래에 SKILL.md가 있는 스킬이 없습니다")
-    for alias, content in skills.items():
-        front = package.front_matter(content["SKILL.md"].decode("utf-8", "replace"))
-        if not SKILL_NAME.match(alias):
-            problems.append(f"{alias}: 스킬 이름은 소문자·숫자·하이픈 64자 이하 (하이픈으로 시작·끝·연속 불가)")
-        if front.get("name") != alias:
-            problems.append(f"{alias}: SKILL.md의 name이 폴더 이름과 다릅니다")
-        if not 1 <= len(str(front.get("description") or "")) <= 1024:
-            problems.append(f"{alias}: description은 1~1024자")
-        if alias == TEMPLATE_SKILL:
-            problems.append(f"{alias}: init 템플릿입니다. 폴더 이름과 SKILL.md를 내 스킬로 바꾸세요")
-        elif str(front.get("description") or "").strip() == SKILL_DESCRIPTION:
-            problems.append(f"{alias}: description이 템플릿 그대로입니다 (언제 이 스킬을 쓰는지 적으세요)")
-    steps.append({"name": "skills", "status": "failed" if problems else "passed",
-                  "detail": "; ".join(problems) if problems else f"스킬 {len(skills)}개 형식이 맞습니다 ({', '.join(sorted(skills))})"})
 
-    leaks = find_secrets(files)
-    steps.append({"name": "secrets", "status": "failed" if leaks else "passed",
-                  "detail": "비밀값·금지 파일: " + ", ".join(leaks) if leaks else "비밀값·금지 파일이 없습니다"})
-    return steps
+def spec_step(files: dict[str, bytes], build_type: str | None = None) -> dict[str, Any]:
+    """The `format` step (SPEC.md) on its own."""
+    return validate.check_spec(files, build_type)
+
+
+def dev_approver_list(value: Any) -> list[str]:
+    """The development exception's people: emails, from a list or a comma-separated text."""
+    items = value if isinstance(value, list) else str(value or "").split(",")
+    out = [str(x).strip() for x in items if str(x).strip()]
+    bad = [x for x in out if not validate.EMAIL.match(x)]
+    if bad:
+        raise ServiceError(400, "bad_policy", f"dev_approvers는 이메일입니다: {', '.join(bad)}")
+    return list(dict.fromkeys(out))
 
 
 def is_admin(caller: Caller) -> bool:
     return "admins" in caller.groups
-
-
-def find_secrets(files: dict[str, bytes]) -> list[str]:
-    """Files with a secret-looking value or a forbidden name (the Gate's secrets check, also run before Git)."""
-    leaks = [f"{rel} ({label})" for rel, data in files.items() for label, pattern in SECRET_PATTERNS.items()
-             if pattern.search(data.decode("utf-8", "ignore"))]
-    return leaks + [f"{rel} (금지 파일)" for rel in files if FORBIDDEN_FILES.search(rel)]

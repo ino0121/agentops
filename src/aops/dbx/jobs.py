@@ -20,15 +20,18 @@ def print_validation(run_id: str, registry: str, report: dict[str, Any]) -> None
     say(f"  에이전트    {report['agent_id']} {report['version']}  (validation_run_id {run_id})")
     if report.get("artifact_path"):
         say(f"  검사 대상   {report['artifact_path']}  (파일 {len(report['files'])}개, sha256 {(report['sha256'] or '')[:12]})")
-    say(f"  실행 코드   aops_cli {__version__} · aops.dbx.service.Service.run_evaluation (형식: check_agent·nocode.check_steps, 평가: gate_eval)")
+    say(f"  실행 코드   aops_cli {__version__} · aops.dbx.service.Service.run_evaluation "
+        "(형식: aops.validate, 내용 검토: aops.dbx.review, 품질: gate_eval)")
     for i, step in enumerate(report.get("steps") or [], 1):
-        mark = {"passed": "✓", "skipped": "–"}.get(step["status"], "✗")
-        say(f"\n  [{i}] {step['name']:<8}{mark} {step.get('detail') or ''}")
+        mark = {"passed": "✓", "skipped": "–", "warned": "!"}.get(step["status"], "✗")
+        say(f"\n  [{i}] {step['name']:<8}{mark} {step.get('detail') or ''}" + ("  (승인자 판단, 반려 조건 아님)" if step.get("advisory") else ""))
         if step["name"] in CHECK_RULES:
             say(f"      규칙: {CHECK_RULES[step['name']]}")
-        for rule in step.get("rules") or []:  # no-code definition rules, one line each
-            say(f"      {'✓' if rule['passed'] else '✗'} {rule['id']:<30} {rule['level']:<5} {rule['message']}"
+        for rule in step.get("rules") or []:  # the self-check rules, one line each
+            say(f"      {'✓' if rule['passed'] else '✗' if rule['level'] == 'ERROR' else '!'} {rule['id']:<30} {rule['level']:<5} {rule['message']}"
                 + ("" if rule["passed"] else f"  → {rule['fix']}"))
+        if step["name"] == "review" and report.get("review"):
+            print_review(say, report["review"])
     if report.get("results"):
         say("\n  평가 문항")
         for r in report["results"]:
@@ -41,8 +44,24 @@ def print_validation(run_id: str, registry: str, report: dict[str, Any]) -> None
             say(f"    {rel}")
     if report.get("reason"):
         say(f"\n  사유: {report['reason']}")
-    say(f"\n결과: {report['status']} → {registry}.validation_runs (validation_run_id = '{run_id}')"
+    say(f"\n결과: {report['status']} → {registry}.validation_runs (validation_run_id = '{run_id}', 리포트는 checks:review)"
         + (f", 문항별 {registry}.eval_results" if report.get("results") else ""))
+
+
+def print_review(say: Any, review: dict[str, Any]) -> None:
+    """The content review in the Job output: what was read, then the checklist with its evidence."""
+    cov = review.get("coverage") or {}
+    say(f"      프롬프트 {review.get('prompts')} · 모델 {review.get('model')} · 호출 {review.get('turns')}번 · "
+        f"토큰 {review.get('tokens')} · {review.get('seconds')}초")
+    say(f"      읽은 파일 {cov.get('files_read')}/{cov.get('text_files')} (줄 {cov.get('lines_read')}/{cov.get('lines_total')})"
+        + (f" · 안 읽음 {', '.join(cov.get('unread') or [])}" if cov.get("unread") else ""))
+    say(f"      요약: {review.get('summary')}")
+    for item in review.get("items") or []:
+        say(f"      [{item['status']:<9}] {item['id']}: {item.get('reason') or ''}"[:600])
+        for finding in item.get("findings") or []:
+            where = f"{finding['file']}:{finding['line']}" if finding.get("line") else finding["file"]
+            say(f"                  {where}  {finding.get('issue') or ''}  «{(finding.get('excerpt') or '')[:120]}»")
+    say(f"      의견({review.get('recommendation')}): {review.get('opinion')}")
 
 
 def print_deploy(gate_id: str, registry: str, report: dict[str, Any]) -> None:

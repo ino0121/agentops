@@ -45,7 +45,9 @@ class AgentStatus(Agent):
     latest_status: VersionStatus | None = None
     production_version: str | None = Field(None, examples=["1.2.0"])
     last_validation: RunStatus | None = None
+    last_review: Literal["pass", "warn", "fail"] | None = Field(None, description="마지막 평가의 내용 검토 판정")
     pending_gates: int = Field(0, examples=[1])
+    approvers: list[str] = Field(default_factory=list, description="지정 승인자 (SPEC.md approvers, 에이전트 한 건을 볼 때)")
     source_missing: bool = Field(False, description="고등급이라 소스 없이 정보만 등록됨 (\"소스 없음\")")
     updated_at: datetime | None = None
 
@@ -71,6 +73,7 @@ class AgentVersion(BaseModel):
     git_status: Literal["synced", "failed", "skipped"] | None = None
     size_bytes: int | None = None
     registered_by: str | None = None
+    note: str | None = Field(None, examples=["사내 주소·고객 정보 제거"], description="등록 사유 (`aops register --note`)")
     harness: str | None = Field(None, examples=["claude"])
     harness_version: str | None = Field(None, examples=["2.1.317"])
     uc_model_version: int | None = Field(None, examples=[3])
@@ -96,11 +99,57 @@ class AgentVersionDetail(AgentVersion):
 
 
 class ValidationStep(BaseModel):
-    name: str = Field(examples=["format", "skills", "project", "definition", "secrets", "evaluate", "integrity", "record"])
-    status: Literal["pending", "running", "passed", "failed", "skipped"]
+    name: str = Field(examples=["format", "config", "instructions", "skills", "evals", "project", "definition", "secrets", "review", "evaluate", "integrity", "record"])
+    status: Literal["pending", "running", "passed", "warned", "failed", "skipped"] = Field(description="warned: 내용 검토에 주의 항목이 있음")
     detail: str | None = Field(None, examples=["correctness 0.86 ≥ 0.80"])
     metrics: dict[str, float] = Field(default_factory=dict)
-    rules: list[dict[str, Any]] = Field(default_factory=list, description="노코드 definition 단계: 규칙별 결과 {id, level, passed, message, fix}")
+    rules: list[dict[str, Any]] = Field(default_factory=list, description="셀프 체크 규칙별 결과 {id, level(ERROR·WARN), passed, message, fix}")
+    advisory: bool = Field(False, description="리포트용 단계(review·evaluate): 실패해도 반려하지 않고 승인자가 판단한다")
+    verdict: str | None = Field(None, examples=["pass", "warn", "fail"], description="review: 내용 검토 판정")
+    recommendation: str | None = Field(None, examples=["approve", "changes", "reject"], description="review: 검토 모델의 권고")
+    score: float | None = Field(None, description="definition: 준수율")
+
+
+class ReviewFinding(BaseModel):
+    file: str = Field(examples=["SPEC.md"])
+    line: int | None = Field(None, examples=[12])
+    excerpt: str = Field("", examples=["담당 홍길동 (사번 A12345)"])
+    issue: str = Field(examples=["사번 노출"])
+
+
+class ReviewItem(BaseModel):
+    id: str = Field(examples=["internal_info"])
+    title: str = Field(description="프롬프트 체크리스트의 통과 조건")
+    status: Literal["pass", "warn", "fail", "na", "unchecked"] = Field(description="unchecked: 검토 모델이 답하지 않음")
+    reason: str = Field("", description="판정 이유")
+    findings: list[ReviewFinding] = Field(default_factory=list, description="근거 (파일·줄·발췌)")
+
+
+class ReviewCoverage(BaseModel):
+    files_total: int
+    text_files: int
+    files_read: int
+    unread: list[str] = Field(default_factory=list)
+    binary: list[str] = Field(default_factory=list)
+    lines_total: int = 0
+    lines_read: int = 0
+    partial: list[str] = Field(default_factory=list, description="일부만 읽은 큰 파일")
+
+
+class ReviewReport(BaseModel):
+    """The content review the approver reads: a checklist with reasons and evidence, and the reviewer's opinion."""
+
+    verdict: Literal["pass", "warn", "fail"]
+    recommendation: Literal["approve", "changes", "reject"]
+    summary: str
+    opinion: str
+    items: list[ReviewItem]
+    coverage: ReviewCoverage
+    prompts: dict[str, int] = Field(examples=[{"common": 1, "skill": 0}], description="쓴 프롬프트 버전 (종류별)")
+    model: str = Field(examples=["databricks-claude-sonnet-5-5"])
+    turns: int = 0
+    tokens: dict[str, int] = Field(default_factory=dict)
+    seconds: float = 0
 
 
 class EvalResult(BaseModel):
@@ -128,6 +177,8 @@ class EvaluationRun(BaseModel):
     failure_reason: str | None = None
     links: list[Link] = Field(default_factory=list, description="Job 실행, MLflow 실행")
     results: list[EvalResult] = Field(default_factory=list, description="문항별 평가 결과 (한 실행을 볼 때)")
+    review: ReviewReport | None = Field(None, description="내용 검토 리포트 (승인자가 보는 체크리스트)")
+    started_by: str | None = None
     started_at: datetime
     ended_at: datetime | None = None
 
@@ -236,7 +287,7 @@ def get_agent(agent_id: str, request: Request) -> AgentStatus:
     svc = service_for(None)
     caller_of(request, svc)
     row = svc.agent_status(agent_id)
-    return AgentStatus(**{**row, "pending_gates": int(row.get("pending_gates") or 0)})
+    return AgentStatus(**{**row, "pending_gates": int(row.get("pending_gates") or 0), "approvers": svc.agent_approvers(agent_id)})
 
 
 @router.get("/agents/{agent_id}/versions", summary="버전 목록", **command(None, DBX, screen="console 레지스트리"))

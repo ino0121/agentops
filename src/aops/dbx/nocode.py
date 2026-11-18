@@ -20,7 +20,7 @@ from typing import Any
 
 from .. import package
 from . import genie_rules
-from .base import AGENT_ID, CRITICALITY, SENSITIVITY, Caller, ServiceError, now_id
+from .base import AGENT_ID, CRITICALITY, SENSITIVITY, VERSION_COLUMNS, Caller, ServiceError, clean_note, gate_open_error, now_id
 
 ROOT = "/Workspace/aops/no-code"  # admin setup makes it and gives the aops service principal CAN MANAGE
 PRODUCTION = "_production"  # production spaces: <root>/_production/<agent_id> (an agent id never starts with "_")
@@ -67,12 +67,14 @@ def genie_url(host: str, space_id: str | None) -> str | None:
     return f"{host.rstrip('/')}/genie/rooms/{space_id}" if space_id else None
 
 
-def initial_space(tables: list[str], purpose: str | None) -> dict[str, Any]:
-    """A first definition: the picked tables (Genie wants them sorted) and a text instruction with the standard sections."""
+def initial_space(tables: list[str], purpose: str | None, metric_views: list[str] | None = None) -> dict[str, Any]:
+    """A first definition: the picked tables and metric views (Genie wants each list sorted) and a text instruction
+    with the standard sections."""
     text = TEXT_TEMPLATE.format(purpose=" ".join((purpose or "").split()) or "이 Genie가 답하는 질문을 적습니다.")
-    return {"version": 2,
-            "data_sources": {"tables": [{"identifier": t} for t in sorted(set(tables))]},
-            "instructions": {"text_instructions": [{"id": now_id(), "content": [text]}]}}
+    data: dict[str, Any] = {"tables": [{"identifier": t} for t in sorted(set(tables))]}
+    if metric_views:
+        data["metric_views"] = [{"identifier": t} for t in sorted(set(metric_views))]
+    return {"version": 2, "data_sources": data, "instructions": {"text_instructions": [{"id": now_id(), "content": [text]}]}}
 
 
 def sources(definition: dict[str, Any]) -> set[str]:
@@ -114,20 +116,11 @@ def definition_of(files: dict[str, bytes]) -> dict[str, Any]:
     return json.loads(files[SPACE].decode("utf-8"))
 
 
-def check_steps(files: dict[str, bytes], policy: dict[str, Any], format_step: dict[str, Any]) -> list[dict[str, Any]]:
-    """The Gate on a snapshot: SPEC.md format, the definition rules and secrets (integrity and record come after)."""
-    from .service import find_secrets
+def check_steps(files: dict[str, bytes], policy: dict[str, Any], lookup: Any = None) -> list[dict[str, Any]]:
+    """The validate checklist on a snapshot: SPEC.md, the definition rules and secrets (integrity and record come after)."""
+    from .. import validate
 
-    no_code = policy.get("no_code") or {}
-    try:
-        definition = definition_of(files)
-        step = genie_rules.format_step(definition, lint_min=float(no_code.get("lint_min", 0.9)), rules=no_code.get("rules"))
-        rules = {**step, "name": "definition", "metrics": {"score": step["score"]}}
-    except (KeyError, ValueError) as error:
-        rules = {"name": "definition", "status": "failed", "detail": f"{SPACE}를 읽지 못했습니다 ({error})", "rules": []}
-    leaks = find_secrets(files)
-    return [format_step, rules, {"name": "secrets", "status": "failed" if leaks else "passed",
-                                 "detail": "비밀값·금지 파일: " + ", ".join(leaks) if leaks else "비밀값·금지 파일이 없습니다"}]
+    return validate.check(files, "no_code", policy, lookup)
 
 
 def principal_of(principal: str) -> tuple[str, str]:
@@ -185,11 +178,13 @@ class NoCodeMixin:
             raise ServiceError(400, "bad_spec", "중요도는 low·medium·high, 민감도는 public·internal·confidential·personal입니다", "aops init")
         source = (body.get("genie_space_id") or "").strip()
         mode = body.get("genie_mode") or ("copy" if source else "new")
-        tables = [t.strip() for t in body.get("tables") or [] if t and t.strip()]
+        tables = list(dict.fromkeys(t.strip() for t in body.get("tables") or [] if t and t.strip()))
+        metric_views = list(dict.fromkeys(t.strip() for t in body.get("metric_views") or [] if t and t.strip() and t.strip() not in tables))
         if mode == "new":
-            bad = [t for t in tables if not TABLE.match(t)]
-            if not tables or bad or len(tables) > 30:
-                raise ServiceError(400, "bad_tables", "테이블을 <catalog>.<schema>.<table> 형태로 1~30개 적으세요"
+            picked = tables + metric_views
+            bad = [t for t in picked if not TABLE.match(t)]
+            if not picked or bad or len(picked) > 30:
+                raise ServiceError(400, "bad_tables", "테이블(메트릭 뷰 포함)을 <catalog>.<schema>.<table> 형태로 1~30개 고르세요"
                                    + (f" (형태가 다른 것: {', '.join(bad[:3])})" if bad else ""), "aops init")
         elif mode in ("copy", "move"):
             if not SPACE_ID.match(source):
@@ -214,7 +209,8 @@ class NoCodeMixin:
         spec = {"agent_id": agent_id, "name": (body.get("display_name") or "").strip() or agent_id, "build_type": "no_code",
                 "owner": caller.email, "owner_group": (body.get("owner_group") or "").strip(), "service_criticality": crit,
                 "data_sensitivity": sens, "security_level": (body.get("security_level") or "general").strip(),
-                "consumer_group": (body.get("consumer_group") or "").strip(), "description": description}
+                "consumer_group": (body.get("consumer_group") or "").strip(), "description": description,
+                "approvers": ", ".join(a.strip() for a in body.get("approvers") or [] if a and a.strip())}
         notes = ("이 폴더의 Genie(개발용)를 고친 뒤 aops console에서 배포를 요청합니다. 배포 요청 때 이 파일과 개발용 정의를 "
                  "함께 스냅샷으로 떠서 평가하고, 승인되면 같은 내용이 운영용 Genie로 나갑니다. 위 항목은 여기서 고칠 수 있습니다.")
         self.w.workspace.upload(f"{folder}/SPEC.md", io.BytesIO(render_spec(spec, notes).encode("utf-8")),
@@ -226,7 +222,7 @@ class NoCodeMixin:
             space_id, made = source, False
         else:
             payload = {"warehouse_id": warehouse, "title": title, "description": description, "parent_path": folder,
-                       "serialized_space": json.dumps(definition or initial_space(tables, description), ensure_ascii=False)}
+                       "serialized_space": json.dumps(definition or initial_space(tables, description, metric_views), ensure_ascii=False)}
             space_id, made = self._user_genie(caller, "POST", "/api/2.0/genie/spaces", payload, "만들기")["space_id"], True
 
         warnings = []
@@ -243,7 +239,7 @@ class NoCodeMixin:
                  {"id": agent_id, "dev": space_id, "folder": folder, "consumer": spec["consumer_group"] or None, "wh": warehouse}),
                 self._event_statement(agent_id, None, "create", caller.email,
                                       {"folder": folder, "dev_space_id": space_id, "genie_mode": mode, "source_space_id": source or None,
-                                       "tables": tables}),
+                                       "tables": tables, "metric_views": metric_views}),
             ])
         except Exception:
             if made:
@@ -366,12 +362,17 @@ class NoCodeMixin:
         if open_gate:
             if (self.gate_snapshot(open_gate["gate_id"]) or {}).get("snapshot_sha256") == sha:
                 return self.advance(open_gate["gate_id"])  # the same request again: keep following it
-            raise ServiceError(409, "gate_open", f"진행 중인 배포 요청이 있습니다 ({open_gate['version']}, {open_gate['gate_id']})", "aops deploy")
+            raise gate_open_error(open_gate)
 
         proposed, change = snap["proposed"], snap["change"]
         policy_version, policy = self.policy()
         gate_id = now_id()
+        from .. import validate
+
+        approvers = validate.approvers_of(package.front_matter(snap["files"]["SPEC.md"].decode("utf-8", "replace")))
+        self.check_someone_approves(caller, approvers, policy)
         detail = {"gate_id": gate_id, "upgrade_type": change, "snapshot_sha256": sha, "snapshot_path": snap["path"],
+                  "approvers": approvers,
                   "definition_sha256": genie_rules.definition_hash(snap["definition"]), "dev_space_id": snap["genie"]["dev_space_id"],
                   "diff": diff(snap["previous"], snap["definition"])}
         self.sql.atomic([
@@ -383,8 +384,10 @@ class NoCodeMixin:
             self._event_statement(agent_id, proposed, "gate_requested", caller.email, detail),
         ])
         # a passed evaluation of this very content (aops evaluate before the request) counts
+        from .service import WITH_REVIEW
+
         passed = self.sql.one(f"SELECT validation_run_id FROM {self.sql.table('validation_runs')} WHERE agent_id = :a AND source_sha256 = :sha "
-                              "AND policy_version = :p AND status = 'passed' AND mode = 'job' ORDER BY started_at DESC LIMIT 1",
+                              f"AND policy_version = :p AND status = 'passed' AND mode = 'job' {WITH_REVIEW} ORDER BY started_at DESC LIMIT 1",
                               {"a": agent_id, "sha": sha, "p": policy_version})
         if policy["validation_mode"] == "exempt" or passed:
             self._after_gate(gate_id, passed["validation_run_id"] if passed else None)
@@ -463,7 +466,7 @@ class NoCodeMixin:
                 (f"UPDATE {self.sql.table('agent_versions')} SET status = 'retired' WHERE agent_id = :a AND status = 'production'", {"a": agent_id})]
             if new:
                 statements += [
-                    (f"INSERT INTO {self.sql.table('agent_versions')} VALUES (:id, :v, 'production', :sha, :path, :size, NULL, NULL, NULL, "
+                    (f"INSERT INTO {self.sql.table('agent_versions')} {VERSION_COLUMNS} VALUES (:id, :v, 'production', :sha, :path, :size, NULL, NULL, NULL, "
                      "parse_json(:spec), :by, current_timestamp())",
                      {"id": agent_id, "v": version, "sha": sha, "path": artifact, "size": len(data), "spec": spec, "by": gate["requester"]}),
                     (f"UPDATE {self.sql.table('agents')} SET name = :name, description = :desc, owner_group = :group, "
@@ -498,6 +501,8 @@ class NoCodeMixin:
                                                  {"principal": g["principal"], "permission": "CAN_RUN", "granted": True, "space_id": prod_id})
                            for g in grants if g["granted"]]
             self.sql.atomic(statements)
+            if new:  # no-code: the deploy makes the version, the request's reason is its note
+                self.set_version_note(agent_id, version, clean_note(gate.get("reason")))
             report = {"status": "succeeded", "agent_id": agent_id, "version": version, "previous": previous, "space_id": prod_id,
                       "space_url": url, "space_action": action, "definition_match": match, "grants": grants, "artifact_path": artifact,
                       "approval_mode": gate.get("approval_mode"), "requester": gate["requester"], "skills": [], "not_in_version": []}

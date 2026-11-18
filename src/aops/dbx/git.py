@@ -183,7 +183,10 @@ def _text(data: bytes) -> str | None:
 
 
 def commit_message(agent_id: str, version: dict[str, Any]) -> str:
-    return (f"{agent_id} {version['version']}\n\n"
+    """`<agent> <version>: <note's first line>`, the rest of the note as the body, then the aops record."""
+    head, _, rest = str(version.get("note") or "").strip().partition("\n")
+    return (f"{agent_id} {version['version']}" + (f": {head.strip()}" if head.strip() else "") + "\n\n"
+            + (f"{rest.strip()}\n\n" if rest.strip() else "") +
             f"Aops-Version: {version['version']}\n"
             f"Aops-Sha256: {version.get('source_sha256') or ''}\n"
             f"Aops-Registered-By: {version.get('registered_by') or ''}\n")

@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 
 from .. import __version__
-from .api import admin, batches, evaluations, lifecycle, meta, monitor, ops, projects, registry, sessions
+from .api import admin, batches, browse, evaluations, lifecycle, meta, monitor, ops, projects, registry, sessions
 from ..dbx.service import ServiceError
 from .common import NotImplementedYet, Problem, bearer
 
@@ -41,8 +41,9 @@ TAGS = [
     {"name": "서버", "description": "상태·버전·내 계정·명령 대응표"},
 ]
 
-def problem(status: int, code: str, title: str, detail: str | None = None, command: str | None = None) -> JSONResponse:
-    body = Problem(title=title, status=status, code=code, detail=detail, command=command)
+def problem(status: int, code: str, title: str, detail: str | None = None, command: str | None = None,
+            data: dict | None = None) -> JSONResponse:
+    body = Problem(title=title, status=status, code=code, detail=detail, command=command, data=data)
     return JSONResponse(body.model_dump(), status_code=status, media_type="application/problem+json")
 
 
@@ -58,7 +59,7 @@ def create_app(*, edition: str = "custom", cors_origins: list[str] | None = None
     )
     app.state.edition = edition
     secured = [Depends(bearer)]
-    for module in (projects, sessions, batches, evaluations, lifecycle, registry, monitor, ops, admin):
+    for module in (projects, browse, sessions, batches, evaluations, lifecycle, registry, monitor, ops, admin):
         app.include_router(module.router, prefix=PREFIX, dependencies=secured)
     app.include_router(meta.router, prefix=PREFIX)
 
@@ -72,7 +73,7 @@ def create_app(*, edition: str = "custom", cors_origins: list[str] | None = None
 
     @app.exception_handler(ServiceError)
     async def service_error(_: Request, exc: ServiceError) -> JSONResponse:
-        return problem(exc.status, exc.code, exc.message, command=exc.command)
+        return problem(exc.status, exc.code, exc.message, command=exc.command, data=getattr(exc, "data", None))
 
     @app.exception_handler(HTTPException)
     async def http_error(_: Request, exc: HTTPException) -> JSONResponse:
