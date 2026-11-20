@@ -179,7 +179,7 @@ class GenieCheckRequest(BaseModel):
 
 
 @router.post(
-    "/no-code/checks", summary="노코드 자가 점검 (Genie 정의 규칙)",
+    "/no-code/checks", summary="노코드 셀프 체크 (Genie 정의 규칙)",
     **command("aops validate", DBX, note="노코드: Gate의 정의 규칙(준수율)을 지금 바로 돌린다. 참고용이며 기록하지 않는다. 서버가 서비스 주체로 정의를 읽으므로 스페이스를 aops 서비스 주체와 공유(편집)해야 한다. 벤치마크는 배포 요청 때."),
 )
 def genie_check(body: GenieCheckRequest, request: Request) -> dict:
@@ -327,7 +327,7 @@ def list_gates(
     return Page[ReleaseGate](items=[_gate(r) for r in rows], next_cursor=None)
 
 
-@router.get("/release-gates/{gate_id}", summary="배포 심사 보기", **command(None, DBX, screen="console 배포 요청·승인"))
+@router.get("/release-gates/{gate_id}", summary="배포 요청 보기 (평가·승인 진행, 리포트)", **command(None, DBX, screen="console 배포 요청·승인"))
 def get_gate(gate_id: str, request: Request) -> ReleaseGateDetail:
     svc = service_for(None)
     caller = caller_of(request, svc)

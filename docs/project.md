@@ -1,6 +1,6 @@
 # 프로젝트 폴더와 aops.toml
 
-[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md)
+[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md) · [console](console.md) · [앱 밖에 띄우기](container.md)
 
 ## 지금 `aops init`이 만드는 폴더 (스킬 기반)
 

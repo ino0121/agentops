@@ -1,10 +1,10 @@
 # aops 명령어
 
-[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md)
+[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md) · [console](console.md) · [앱 밖에 띄우기](container.md)
 
 > **지금** 열: ● 동작 · ◐ 일부 동작 · – 설계. 명령마다 **지금:** 줄에 현재 구현을 적었습니다. 스킬·코드 기반·노코드 세 종류가 같은 명령으로 동작하고, 종류마다 다른 점은 각 명령의 **지금:** 줄에 있습니다.
 
-명령은 22개입니다(console 화면의 배포 요청함과 같은 일을 하는 승인 명령 `gates`·`approve`·`reject` 포함). 등록·배포 명령은 [console 화면](console.md)에서도 모두 됩니다. 개발자가 매일 쓰는 것은 개발 명령 7개입니다. 찾기·가져오기와 등록·배포는 dbx 이상에서만 쓰고, `admin`은 관리자만 씁니다. custom 에디션은 모든 명령이 dbx와 같고, 같은 기능을 `aops serve` API로도 씁니다.
+명령은 아래 표와 같습니다(console 화면의 배포 요청함과 같은 일을 하는 승인 명령 `gates`·`approve`·`reject` 포함). 등록·배포 명령은 설계 중인 `configure`를 빼고 [console 화면](console.md)에서도 됩니다. 개발자가 매일 쓰는 것은 개발 명령 7개입니다. 찾기·가져오기와 등록·배포는 dbx 이상에서만 쓰고, `admin`은 관리자만 씁니다. custom 에디션은 모든 명령이 dbx와 같고, 같은 기능을 `aops serve` API로도 씁니다.
 
 **개발 (모든 에디션, 강제 없음)**
 
@@ -58,7 +58,7 @@ aops init <name> --type no-code --description "…" --tables <c.s.t>,… [--geni
 
 - `--type`: 에이전트 종류입니다. `SPEC.md`의 `build_type`에 기록됩니다.
   - `skill`(기본): 내 PC에 에이전트 폴더와 스킬 템플릿을 만들고 `uv sync`로 aops와 하네스를 설치합니다. 모든 에디션에서 씁니다.
-  - `code`: Agent Bricks 프로젝트(LangGraph·OpenAI Agents SDK)입니다. dbx 이상에서 씁니다. 워크스페이스에서는 Genie Code에 aops 스킬("코드 기반 에이전트 만들기")을 요청하면 템플릿과 aops 설정이 들어옵니다. `aops init --type code`는 같은 템플릿을 내 PC에 만듭니다.
+  - `code`: Agent Bricks 프로젝트(LangGraph·OpenAI Agents SDK)입니다. dbx 이상에서 씁니다. 워크스페이스에서는 console [새 에이전트] → 코드 기반 → [내 워크스페이스에 만들기]가 템플릿과 aops 설정을 올리고, 고치기·셀프 체크·등록·평가·배포는 Genie Code의 aops 스킬이 맡습니다. `aops init --type code`는 같은 템플릿을 내 PC에 만듭니다.
   - `no-code`: Genie Agent입니다. dbx 이상에서 씁니다. aops 서버가 에이전트 폴더를 만들고, 그 폴더에서 Genie Agent를 만들도록 연결합니다. 폴더 권한을 aops가 물려받으므로 따로 공유하지 않아도 평가·배포할 수 있습니다. 이미 만든 Genie Agent는 그 폴더로 옮깁니다.
 - 하네스 프로젝트 설정을 만듭니다. 이 폴더에서 `claude`·`codex`를 직접 실행해도 aops 설정과 기록이 적용됩니다. 하네스에서 이 폴더와 hook을 신뢰로 승인해야 하고, 회사 관리 설정이 프로젝트 hook을 막지 않아야 합니다.
 - 예시 질문 3개와 기본 가드레일 규칙을 넣고, 끝나면 `aops dev`를 엽니다. `--no-ui`면 열지 않습니다.
@@ -100,8 +100,8 @@ aops session list
 aops session show [<id>]
 aops session switch --harness claude|codex
 aops session new [--harness claude|codex]
-aops session import --from claude|codex [--session <id>]
-aops session export <id>
+aops session import --from claude|codex [--session <id>]   # 설계
+aops session export <id>                                   # 설계
 ```
 
 - `list`·`show`: 세션과 구간(하네스·턴 범위), 전환 기록, 인계 내용, 턴별 도구 호출을 보여 줍니다.
@@ -204,7 +204,7 @@ aops register [--version x.y.z] [--bump fix|minor|major] [--note "<사유>"]
 - `--note`(`-m`, 선택): 등록 사유입니다. `agent_versions.note`와 등록 기록에 남고, Git 사본 커밋 메시지의 제목(`<에이전트> <버전>: <사유 첫 줄>`)이 됩니다. console 등록 화면의 "사유" 칸과 같고, 배포 요청 사유의 기본값으로도 쓰입니다.
 - 에이전트마다 UC Volume을 하나 두고, 버전마다 `<version>.zip`을 한 번만 씁니다. 등록된 버전은 바꿀 수 없습니다.
 - 스킬: 등록은 볼륨 zip과 스킬 해시만 남깁니다. UC Skill(Unity Gateway Skills)은 **처음 배포할 때** 배포 Job이 만들고, 이때는 아무에게도 읽기 권한을 주지 않습니다. UC Skill의 내용은 늘 운영 버전이고, 새 버전의 내용은 `deploy` 때 바꿉니다. 배포되지 않은 이름(템플릿, 이름을 바꾼 스킬)은 UC에 생기지 않습니다.
-- 코드: UC registered model 버전과 MLflow LoggedModel도 만듭니다. 평가와 trace가 같은 model ID로 이어집니다.
+- 코드: UC registered model 버전과 MLflow LoggedModel(평가와 trace를 같은 model ID로 잇기)은 설계입니다. 지금은 만들지 않습니다.
 - 노코드: 따로 실행하지 않습니다. 배포에 성공하면 배포 Job이 그 정의로 버전을 등록합니다.
 - Delta `agents`·`agent_versions`에 버전 해시, 하네스·SDK 버전, UC 모델 버전, SPEC 정보를 남깁니다.
 - omni: Omnigent 에이전트로도 등록합니다.
@@ -273,13 +273,13 @@ aops evaluate --agent <이름>       # 노코드: 지금 개발용 정의와 SPE
 ### `aops deploy`
 
 ```bash
-aops deploy [--version x.y.z] [--reason <이유>] [--target <workspace>]
+aops deploy [--version x.y.z] [--reason <이유>] [--target <workspace>]   # --target은 설계
 aops deploy --cancel
-aops deploy --dev
+aops deploy --dev                                                       # 설계
 ```
 
 - **요청:** Delta `deploy_requests`에 남깁니다. 정책의 평가 방식(기본: 이 내용·이 정책으로 통과한 평가 필요)을 확인하고, 통과하지 못하면 승인자에게 가기 전에 반려합니다. 같은 에이전트에 진행 중인 요청이 있으면 받지 않습니다.
-- **승인:** console 화면에서 승인 그룹(`[dbx] approvers`)이 합니다. 요청자 본인은 승인할 수 없습니다. 정책으로 자동 승인이나 외부 결재 확장을 고를 수 있습니다.
+- **승인:** console 화면에서 지정 승인자(SPEC.md `approvers`)나, 없으면 정책의 승인 그룹(`aops admin setup --approver-group`)이 합니다. 요청자 본인은 승인할 수 없습니다. 정책으로 자동 승인이나 외부 결재 확장을 고를 수 있습니다.
 - **운영 반영:** 배포 Job(코드 기반은 aops 서버, 둘 다 서비스 주체)이 승인 기록을 다시 확인하고 내보냅니다.
   - 코드: 해시를 확인한 스냅샷 사본으로 `agentbricks deploy`를 실행해 운영 앱(`agent-bricks-<name>`)을 바꿉니다. `uv.lock`의 정확한 버전으로 설치하고, 배포 뒤 설치된 버전과 앱 응답을 직접 확인합니다.
   - 노코드: 평가한 스냅샷으로 같은 워크스페이스에 운영용 Genie Agent를 만들거나 고칩니다. 작성자는 개발용만 고칩니다. 성공하면 버전을 등록하고 공개 그룹에 실행 권한(`CAN RUN`)을 줍니다.
@@ -333,7 +333,7 @@ aops promote <agent_id> --to group:<그룹> [--to user:<이메일>] [--to sp:<ap
   - 코드: 배포된 앱의 `CAN USE`
   - 스킬: UC Skill의 `READ_VOLUME`. 이 권한이 있어야 `aops load`로 가져옵니다.
 - 그룹은 계정 그룹이어야 합니다. 작업 공간 그룹에는 Unity Catalog 권한을 줄 수 없습니다.
-- 운영 버전이 있어야 합니다. 요청자는 담당자·담당 팀이어야 하고, 서버가 보안 등급별 공개 범위를 검사합니다.
+- 운영 버전이 있어야 합니다. 요청자는 담당자·담당 팀이어야 합니다. 보안 등급별 공개 범위 검사는 설계입니다.
 - 권한은 Databricks 권한(Unity Catalog, 앱·Genie 권한)으로 걸리고 Databricks가 강제합니다. aops는 부여·회수 이력을 남깁니다.
 - **지금:** 스킬 기반이 동작합니다(UC Skill `READ_VOLUME` 부여·회수, `agent_events`에 기록). 사용자와 계정 그룹(`account users`) 대상으로 확인했습니다. 담당자·담당 팀이 운영 버전이 있을 때만 할 수 있습니다. 코드 기반은 운영 앱 `CAN_USE`, 노코드는 운영용 Genie `CAN RUN`을 부여·회수합니다(회수는 그 대상만 뺀 목록으로 다시 설정). 보안 등급별 공개 범위 검사는 설계입니다.
 
@@ -348,7 +348,7 @@ aops monitor dashboard
 
 **지금:** 없습니다 (설계). 개발 중 사용량·비용은 MLflow trace(`aops run`)에서 봅니다.
 
-개인 사용자와 관리자가 사용량·예산과 운영 중인 에이전트를 한곳에서 봅니다. 주 화면은 console 화면의 Monitor이고(`--web`), CLI는 같은 데이터를 표로 보여 줍니다(`--watch`로 주기 갱신).
+(설계) 개인 사용자와 관리자가 사용량·예산과 운영 중인 에이전트를 한곳에서 봅니다. 주 화면은 console의 모니터 화면이 되고(`--web`, 지금은 없음), CLI는 같은 데이터를 표로 보여 줍니다(`--watch`로 주기 갱신).
 
 | 보기 | 개인 (`--me`, 기본) | 관리자 (`--all`) |
 | --- | --- | --- |
@@ -398,25 +398,24 @@ aops admin setup --profile <프로필> --registry <catalog>.<schema> --warehouse
   [--approver-group <그룹>] [--git-connection <UC 연결> --git-owner <GitHub 조직> [--git-repo-prefix aops-] | --no-git] \
   [--users-group <그룹>] [--genie-skills <스킬 폴더>] [--only tables,policy,dist,app,grants,genie] [--apply]
   [--service-principal <application ID> [--server-url https://…]]   # 서버를 앱 밖(컨테이너)에 띄울 때
-aops admin policy set <policy.toml>
-aops admin policy show|diff
+aops admin policy set <policy.toml>      # 설계 (지금은 console 정책 화면·POST /api/v1/admin/policies)
+aops admin policy show|diff              # 설계
 ```
 
 관리자만 씁니다.
 
 - **앱 밖의 서버 (`--service-principal`):** 서버를 컨테이너로 띄울 때 그 서버의 서비스 주체를 줍니다. `app` 단계는 건너뛰고 `grants`가 그 주체에 같은 권한과 warehouse `CAN_USE`를 줍니다. `--server-url`을 주면 Genie Code 스킬이 앱 대신 그 주소를 부릅니다. 끝에 컨테이너 환경 변수를 보여 줍니다([앱 밖에 띄우기](container.md)).
 
-- `setup`: 조직 공통 자원을 번들(`databricks.yml`)로 한 번 배포합니다.
-  - 레지스트리 스키마와 테이블
-  - evaluate Job, 배포 Job (서버리스, 서비스 주체 실행, 자동 재시도 끔)
-  - aops 서버(console 화면 + API, Databricks App)와 Apps telemetry 대상 스키마
-  - monitor용 뷰, 승인 태그 정책 (governed tags)
+- `setup`: 조직 공통 자원을 준비합니다.
+  - 레지스트리 스키마와 테이블, 정책, Job용 aops 패키지, aops 서버(console 화면 + API, Databricks App), 서비스 주체 권한, Genie Code 스킬
+  - evaluate Job·배포 Job(서버리스, 서비스 주체 실행, 자동 재시도 끔)은 서버가 처음 쓸 때 만듭니다
+  - 번들(`databricks.yml`) 배포, Apps telemetry 대상 스키마, monitor용 뷰, 승인 태그 정책(governed tags)은 설계입니다
   - 권한: 레지스트리 테이블·에이전트 볼륨·UC Skill에 쓰는 것은 aops 서비스 주체만, 사람에게는 읽기만. 노코드 평가·배포를 위해 aops 서비스 주체에 노코드가 쓰는 데이터의 읽기 권한
 - custom이면 Custom Front가 쓸 그룹·서비스 주체에도 aops 서버 앱의 `CAN USE`를 줍니다 (앱을 따로 만들지 않습니다).
 - 권한 부여는 미리 보여 주고 `--apply`일 때만 실행합니다.
 - `policy`: 관리자 정책을 올리고 버전을 관리합니다.
 - **지금:** `setup`이 여섯 단계로 동작합니다. 미리보기가 기본이고 `--apply`일 때만 실행합니다.
-  1. `tables`: 레지스트리 테이블 14개와 뷰 `agent_status`
+  1. `tables`: 레지스트리 스키마(없으면), 테이블 15개와 뷰 `agent_status`
   2. `policy`: 옵션의 평가·승인 방식으로 정책 버전을 올림 (`policy` 명령 대신). Git 사본은 `--git-connection`·`--git-owner`로 켜고 `--no-git`으로 끔. git 옵션이 없으면 지금 정책의 git 설정을 그대로 둠
   3. `dist`: Job이 설치할 aops 패키지를 빌드해 볼륨 `aops_dist`에 올림
   4. `app`: aops 서버(Databricks App)를 배포하고 레지스트리·웨어하우스·패키지 경로를 환경변수로 넣음. 코드는 `/Workspace/aops/server/<앱>`(워크스페이스 관리자만 쓰기)에 올리고, 루트에 폴더를 만들 권한이 없으면 실행한 관리자의 홈 폴더(본인과 관리자만 쓰기)에 둡니다. 그 폴더에 쓸 수 있는 주체를 보여 줌. `/Workspace/Shared`는 모든 사용자가 `CAN_MANAGE`를 물려받아 쓰지 않습니다. warehouse를 앱 자원으로 붙일 권한이 없으면 ID만 넘기고, 권한 부여가 실패하면 멈추지 않고 주인에게 부탁할 `GRANT` 문을 보여 줍니다
@@ -437,10 +436,10 @@ aops serve [--host 127.0.0.1] [--port 8000] [--cors-origin <url>]
 dbx 기능을 HTTP API 서버로 엽니다. 조직의 웹·서비스가 자기 화면에서 aops를 쓰게 하는 custom 에디션의 서버입니다. 개발 화면과 aops 서버의 console 화면도 같은 서버 코드입니다.
 
 - **API:** REST `/api/v1`과 실행 스트림 SSE(AG-UI 이벤트)입니다. OpenAPI 문서는 `/api/v1/openapi.json`입니다. CLI 명령과 API는 같은 기능입니다.
-- **오래 걸리는 일:** 검증·배치·평가는 `202`와 상태를 돌려주고 진행을 스트림으로 흘립니다. 스트림은 주기적으로 신호를 보내고, 끊기면 `Last-Event-ID`로 이어 받습니다.
+- **오래 걸리는 일:** 평가는 `202`와 상태를 돌려주고, 진행은 `GET /api/v1/evaluations/{id}/progress`로 봅니다(console 2초, CLI 3초 간격). SSE 스트림(`…/events`, `Last-Event-ID`로 이어 받기)은 설계라 지금은 `501`입니다.
 - **위치:** 조직 서버나 컨테이너에서 이 명령으로 띄웁니다(`deploy/container/Dockerfile`, [앱 밖에 띄우기](container.md)). Databricks App(aops 서버)은 `aops admin setup`이 배포합니다.
 - **인증:** CLI·서비스는 Databricks OAuth 토큰(`Authorization: Bearer`)을 보냅니다. 앱 밖의 브라우저는 서버의 Databricks OAuth 로그인(`/auth/login`, 계정의 App connection, `AOPS_OAUTH_CLIENT_ID`)으로 들어오고, 세션은 암호화 쿠키에만 둡니다. 사람 권한이 필요한 일은 그 사람 토큰으로, 레지스트리 기록·Job 실행·권한 변경은 서버 서비스 주체로 합니다. 역할은 그 토큰의 Databricks 그룹으로 정합니다.
 - **실행:** 하네스는 세션마다 Databricks Sandbox에서 돕니다. 프로젝트는 Workspace 폴더(Git 폴더)나 UC Volume에 둡니다.
 - `/`는 console 화면입니다([console](console.md)). 요청·응답 형식은 `/api/v1/docs`에서 보고, 명령 ↔ API 대응은 `GET /api/v1/meta/commands`로 받습니다.
 - `--cors-origin`: 다른 도메인의 브라우저 화면이 직접 부를 때 허용할 주소입니다. 조직 서버에서 띄울 때만 씁니다.
-- **지금:** 동작합니다. 환경변수 `AOPS_REGISTRY`·`AOPS_WAREHOUSE_ID`(Job용 `AOPS_DIST_WHEEL`)가 있으면 스킬·코드 기반·노코드 경로(만들기·셀프 체크·등록·평가·배포·승인·권한·가져오기, 에이전트·버전·평가·배포·운영 버전·이력 조회, 정책 조회·변경, 내 계정, 새 에이전트 폴더)가 레지스트리에 연결되고, 없으면 `501`입니다([API](api.md)). PC에서 프로필(`AOPS_PROFILE`)로 띄우면 브라우저의 사용자는 그 프로필 사용자입니다. 하네스 실행(대화 경로)과 Sandbox는 아직 없습니다.
+- **지금:** 동작합니다. 환경변수 `AOPS_REGISTRY`·`AOPS_WAREHOUSE_ID`(Job용 `AOPS_DIST_WHEEL`)가 있으면 스킬·코드 기반·노코드 경로(만들기·셀프 체크·등록·평가·배포·승인·권한·가져오기, 에이전트·버전·평가·배포·운영 버전·이력 조회, 정책 조회·변경, 내 계정, 새 에이전트 폴더)가 레지스트리에 연결되고, 없으면 `501`입니다([API](api.md)). PC에서 프로필(`AOPS_PROFILE`)로 띄우면 브라우저의 사용자는 그 프로필 사용자입니다. `AOPS_OAUTH_CLIENT_ID`를 주면 사람은 Databricks OAuth로 로그인합니다([앱 밖에 띄우기](container.md)). 하네스 실행(대화 경로)과 Sandbox는 아직 없습니다.

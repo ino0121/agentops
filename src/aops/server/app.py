@@ -24,7 +24,7 @@ aops의 dbx 기능을 HTTP로 엽니다. Custom Front(custom), Omnigent UI, 로�
 - **인증:** Databricks OAuth 토큰을 `Authorization: Bearer`로 보냅니다 (사람 U2M, 서비스 M2M).
 - **오류:** 2xx가 아니면 `Problem`(RFC 9457). 화면은 `code`로 분기합니다.
 - **목록:** `Page`. `next_cursor`를 다음 요청의 `cursor`로 넘깁니다.
-- **오래 걸리는 일:** 검증·비교 실행·평가는 `202` + 상태, 진행은 `…/events`(SSE).
+- **오래 걸리는 일:** 평가는 `202` + 상태, 진행은 `GET …/evaluations/{id}/progress`(폴링). SSE `…/events`는 설계(501).
 - **실행 스트림:** AG-UI 이벤트(`threadId`=세션, `runId`=턴). aops 정보는 `CUSTOM` 이벤트.
 - **지금 상태:** 형식만 정해졌고 기능은 `501`을 돌려줍니다.
 """

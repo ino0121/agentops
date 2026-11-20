@@ -22,7 +22,7 @@ aops 서버는 보통 Databricks App(`aops admin setup`의 `app` 단계)으로 �
    - Client secret: 선택입니다. 만들면 `AOPS_OAUTH_CLIENT_SECRET`으로 주고(confidential), 없으면 PKCE만으로 됩니다.
    - 토큰 수명: 기본 access token 1시간, refresh token 7일. single-use refresh token은 켜지 않는 것을 권합니다(복제본 여럿이 같은 토큰을 동시에 갱신하면 한쪽이 로그아웃됩니다).
 2. **흐름:** `/auth/login` → 워크스페이스 `/oidc/v1/authorize`(PKCE S256, state) → 회사 SSO(워크스페이스에 연동된 IdP) → `/auth/callback`이 코드를 `/oidc/v1/token`에서 토큰으로 바꾸고 SCIM `/Me`로 계정을 확인 → 세션 쿠키 → 원래 화면.
-3. **세션:** refresh token은 서버 키로 암호화한 HttpOnly·Secure·SameSite=Lax 쿠키(`aops_session`)에만 있습니다. access token은 서버 메모리에 두고, 없거나 만료되면 쿠키의 refresh token으로 받아 옵니다(재시작·다른 복제본도 그대로). 데이터베이스는 쓰지 않습니다. `AOPS_SESSION_KEY`를 바꾸면 모두 로그아웃됩니다.
+3. **세션:** refresh token은 서버 키로 암호화한 HttpOnly·SameSite=Lax 쿠키(`aops_session`, 주소가 https이면 Secure)에만 있습니다. access token은 서버 메모리에 두고, 없거나 만료되면 쿠키의 refresh token으로 받아 옵니다(재시작·다른 복제본도 그대로). 데이터베이스는 쓰지 않습니다. `AOPS_SESSION_KEY`를 바꾸면 모두 로그아웃됩니다.
 4. **보호:** 쿠키로 들어온 요청이 무언가를 바꾸면(POST·PUT·PATCH·DELETE) `Origin`이 `AOPS_PUBLIC_URL`과 같아야 합니다. 로그인 뒤 돌아갈 곳은 이 서버 안의 경로만 받습니다. Bearer 요청은 쿠키를 보지 않습니다.
 5. **console:** 로그인이 필요하면 로그인 화면으로 가고, 사이드바 아래 [로그아웃]이 생깁니다. 로그아웃은 aops 세션만 지웁니다. 브라우저의 Databricks 로그인은 그대로라 [다시 로그인]을 누르면 바로 들어옵니다.
 
@@ -49,7 +49,7 @@ aops 서버는 보통 Databricks App(`aops admin setup`의 `app` 단계)으로 �
 ## 준비 순서
 
 1. **서비스 주체:** 계정이나 워크스페이스에서 서버용 서비스 주체를 만들고 OAuth secret을 발급합니다.
-2. **레지스트리·권한:** `aops admin setup`을 그 서비스 주체로 돌립니다. `app` 단계는 건너뛰고, 권한(레지스트리 USE·SELECT·MODIFY, 패키지 볼륨, Git 연결, 노코드 폴더 CAN_MANAGE, warehouse CAN_USE)을 그 서비스 주체에 줍니다. 마지막에 컨테이너에 넣을 환경 변수를 보여 줍니다.
+2. **레지스트리·권한:** 관리자 프로필로 `aops admin setup`을 돌리고 `--service-principal`에 그 서비스 주체를 줍니다. `app` 단계는 건너뛰고, 권한(레지스트리 USE·SELECT·MODIFY, 패키지 볼륨, Git 연결, 노코드 폴더 CAN_MANAGE, warehouse CAN_USE)을 그 서비스 주체에 줍니다. 마지막에 컨테이너에 넣을 환경 변수를 보여 줍니다.
 
    ```bash
    aops admin setup --profile <관리자 프로필> --registry <catalog>.<schema> --warehouse <ID> \
@@ -80,7 +80,7 @@ aops 서버는 보통 Databricks App(`aops admin setup`의 `app` 단계)으로 �
 - **동작:** 로그인·세션·갱신·로그아웃·CSRF 확인, 노트북 토큰, `admin setup --service-principal`·`--server-url`, Dockerfile이 동작합니다.
 - **테스트:** 가짜 OAuth 서버로 시험했습니다(PKCE·state·Basic 인증·갱신·새 refresh token·만료).
 - **컨테이너 실측 (시험 워크스페이스):** 이미지를 빌드해 띄웠습니다.
-  - Bearer API(`/meta/me`·에이전트 목록)와 PC CLI(`AOPS_SERVER`)가 실제 레지스트리로 됩니다.
-  - 브라우저 콘솔도 됩니다: 로그인 → 목록·상세 → 내 카탈로그(사용자 토큰) → 로그아웃. 이때 로그인 화면만 대체 서버(`AOPS_OAUTH_HOST`)로 바꾸고, 그 서버가 시험자의 실제 토큰을 내주게 했습니다.
-  - 서버 신원은 서비스 주체 대신 시험자의 토큰을 썼습니다.
-- **아직:** 실제 App connection으로 Databricks 로그인 화면을 거치는 일, 서비스 주체 M2M으로 서버를 띄우는 일.
+  - 서버는 자기 서비스 주체(OAuth M2M)로 돌고, `admin setup --service-principal`로 준 권한으로 레지스트리를 읽고 씁니다.
+  - Bearer API(`/meta/me`·에이전트 목록)와 PC CLI(`AOPS_SERVER`)가 됩니다.
+  - 브라우저: 계정의 실제 App connection으로 Databricks(SSO) 로그인 → 콘솔(목록·상세·정책, 내 토큰으로 내 폴더에 만들기, 서비스 주체로 등록) → 재시작 뒤에도 세션 유지 → 로그아웃.
+- **아직:** 여러 복제본 앞의 로드 밸런서·HTTPS 구성은 조직 환경에서 시험합니다.

@@ -100,7 +100,7 @@ def markdown(app: FastAPI) -> str:
     lines = [
         "# aops API",
         "",
-        "[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md)",
+        "[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md) · [console](console.md) · [앱 밖에 띄우기](container.md)",
         "",
         "`aops serve`가 여는 HTTP API입니다. Custom Front(custom), Omnigent UI, 개발 화면, console 화면이 모두 이 API를 씁니다. "
         "dbx 에디션의 명령과 1:1로 맞습니다. 서버를 띄우면 `/api/v1/docs`에서 요청·응답 형식을 보고 바로 호출해 볼 수 있습니다.",
@@ -110,15 +110,16 @@ def markdown(app: FastAPI) -> str:
         "## 규칙",
         "",
         "- **경로:** 모두 `/api/v1` 아래입니다. OpenAPI 문서는 `/api/v1/openapi.json`입니다.",
-        "- **인증:** Databricks OAuth 토큰을 `Authorization: Bearer`로 보냅니다. 사람은 U2M, 서비스는 서비스 주체 M2M입니다.",
+        "- **인증:** Databricks OAuth 토큰을 `Authorization: Bearer`로 보냅니다. 사람은 U2M, 서비스는 서비스 주체 M2M입니다. "
+        "Databricks App 밖에 띄운 서버는 브라우저를 Databricks OAuth로 로그인시키고 세션 쿠키로 받습니다([앱 밖에 띄우기](container.md)).",
         "- **오류:** 2xx가 아니면 본문은 `Problem`(RFC 9457)입니다. 화면은 `code`로 분기하고, `command`는 같은 일을 하는 CLI 명령입니다.",
         "- **목록:** `Page`로 옵니다. `next_cursor`를 다음 요청의 `cursor`로 넘깁니다.",
-        "- **오래 걸리는 일:** 검증·비교 실행·평가는 `202`와 상태를 돌려주고, `…/events`(SSE)로 진행을 흘립니다. "
-        "Databricks Apps 앞단이 오래 열린 응답·스트림을 끊을 수 있으므로, SSE는 10초 이하 간격으로 신호를 보내고 끊기면 `Last-Event-ID`로 이어 받습니다.",
+        "- **오래 걸리는 일:** 평가는 `202`와 상태를 돌려주고, 진행은 `GET /evaluations/{id}/progress`를 몇 초 간격으로 읽습니다. "
+        "`…/events`(SSE)는 설계입니다: Databricks Apps 앞단이 오래 열린 응답·스트림을 끊을 수 있으므로, 10초 이하 간격으로 신호를 보내고 끊기면 `Last-Event-ID`로 이어 받게 합니다.",
         "- **실행 스트림:** 턴 실행 스트림은 AG-UI 이벤트입니다(`threadId`=세션, `runId`=턴). aops만의 정보는 `CUSTOM` 이벤트(`aops.handoff`, `aops.skill`, `aops.guardrail`, `aops.usage`)로 옵니다.",
         "- **값:** 상태·종류 같은 열거형은 영문 코드입니다. 한글 표시는 화면이 붙입니다.",
         "- **지금 상태:** dbx 에디션의 스킬·코드·노코드 흐름은 aops 서버가 실제로 처리합니다: 만들기(`POST /projects`, `POST /projects/template`), "
-        "셀프 체크 `validate`(`POST …/validations`, 기록 안 함), 등록 `register`, 평가 Gate `evaluate`(`POST …/evaluations`, `GET /evaluations/{id}`: 내용 검토 리포트 포함), "
+        "셀프 체크 `validate`(`POST …/validations`, 기록 안 함), 등록 `register`, 평가 Gate `evaluate`(`POST …/evaluations`, `GET /evaluations/{id}`: 내용 검토 리포트 포함, 진행 `GET /evaluations/{id}/progress`), "
         "배포 `deploy`(`POST …/deploy-requests`, `GET /release-gates/{id}`)와 승인(리포트 확인)·반려·취소, `promote`, `list`, `load`, 레지스트리 조회(에이전트·버전·평가·배포·운영 버전·이력), "
         "노코드 점검·링크, 만들기 화면 목록(내 테이블·warehouse·Genie 스페이스, 승인자 찾기), 정책, 평가 프롬프트, 내 계정. 나머지(하네스 실행 경로, 세션, 모니터 등)는 요청·응답 형식만 정해져 있고 `501`을 돌려줍니다. "
         "서버에 `AOPS_REGISTRY`·`AOPS_WAREHOUSE_ID`가 없으면 모두 `501`입니다.",
