@@ -198,6 +198,14 @@ class Snapshot:
                 out.append(f"{rel} ({first}줄부터)")
         return out
 
+    def tally(self) -> dict[str, int]:
+        """How far the reading is, for the progress shown while it runs: required files done and their lines read."""
+        required = self.required()
+        left = {item.split(" (")[0] for item in self.incomplete()}
+        return {"files_done": sum(1 for rel in required if rel not in left), "files_total": len(required),
+                "lines_read": sum(len(self.read.get(rel, ())) for rel in required),
+                "lines_total": sum(len(self.text[rel]) for rel in required)}
+
     def list_files(self) -> str:
         rows = [{"path": rel, "bytes": len(self.files[rel]), "lines": len(lines), "text": True, "read": rel in self.read,
                  "large": len(self.files[rel]) > self.file_bytes, "optional": bool(OPTIONAL.search(rel))} for rel, lines in self.text.items()]
@@ -312,8 +320,11 @@ def verdict(items: list[dict[str, Any]]) -> str:
 
 def review(w: Any, files: dict[str, bytes], kind: str, prompts: dict[str, dict[str, Any]], policy: dict[str, Any],
            agent_id: str, call: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-           clock: Callable[[], float] = time.time) -> dict[str, Any]:
-    """Run the review. `prompts`: {kind: {"version", "body"}} for `common` and this kind."""
+           clock: Callable[[], float] = time.time,
+           on_event: Callable[[str, dict[str, Any]], None] | None = None) -> dict[str, Any]:
+    """Run the review. `prompts`: {kind: {"version", "body"}} for `common` and this kind. `on_event(event, info)`
+    hears each model call and tool call with how much has been read (turn · list_files · read · search · refused ·
+    submitted), for the progress people see; it never changes the review."""
     config = settings(policy)
     call = call or serving_call(w, config["model"])
     used = {k: prompts[k] for k in ("common", kind) if k in prompts}
@@ -331,6 +342,15 @@ def review(w: Any, files: dict[str, bytes], kind: str, prompts: dict[str, dict[s
     ]
     started, tokens, turns, report = clock(), {"prompt": 0, "completion": 0}, 0, None
     refused = 0
+
+    def emit(event: str, **extra: Any) -> None:
+        if on_event is None:
+            return
+        try:
+            on_event(event, {**snap.tally(), "turn": turns, "max_turns": int(config["max_turns"]), **extra})
+        except Exception:
+            pass  # the progress is for people watching; the review goes on whatever happens to it
+
     while turns < int(config["max_turns"]) and report is None:
         if clock() - started > float(config["timeout_sec"]):
             break
@@ -338,6 +358,7 @@ def review(w: Any, files: dict[str, bytes], kind: str, prompts: dict[str, dict[s
         body: dict[str, Any] = {"messages": messages, "tools": TOOLS, "max_tokens": int(config["max_tokens"])}
         if last:  # the budget is spent: only the report is asked for now
             body["tool_choice"] = {"type": "function", "function": {"name": "submit_report"}}
+        emit("turn", turn=turns + 1)
         try:
             response = call(body)
         except Exception as error:
@@ -363,21 +384,27 @@ def review(w: Any, files: dict[str, bytes], kind: str, prompts: dict[str, dict[s
             files_arg = args.get("files")
             if name == "list_files":
                 out = snap.list_files()
+                emit("list_files")
             elif name == "read_files":
-                out = snap.read_files(files_arg if isinstance(files_arg, list) else [files_arg] if files_arg else []) \
-                    if files_arg else "files에 읽을 파일을 [{\"path\": \"...\"}] 형태로 주세요"
+                wanted = files_arg if isinstance(files_arg, list) else [files_arg] if files_arg else []
+                out = snap.read_files(wanted) if files_arg else "files에 읽을 파일을 [{\"path\": \"...\"}] 형태로 주세요"
+                emit("read", files=[{"path": str(f.get("path") if isinstance(f, dict) else f), "start": _number(f.get("start_line"), 1) if isinstance(f, dict) else 1,
+                                     "end": _number(f.get("end_line"), 0) if isinstance(f, dict) else 0} for f in wanted[:20]])
             elif name == "search":
                 out = snap.search(str(args.get("pattern") or ""), args.get("path_glob") if isinstance(args.get("path_glob"), str) else None)
+                emit("search", pattern=str(args.get("pattern") or ""), hits=0 if out.startswith(("맞는 줄이 없습니다", "정규식 오류")) else out.count("\n") + 1)
             elif name == "submit_report":
                 answered, missing = judge(args, items)
                 unread = snap.incomplete()
                 if (missing or unread) and not last and refused < 3:
                     refused += 1
+                    emit("refused", unread=len(unread), missing=len(missing))
                     out = ("받지 않았습니다. " + (f"아직 읽지 않은 파일: {', '.join(unread[:30])}. " if unread else "")
                            + (f"빠진 체크리스트 항목: {', '.join(missing)}. " if missing else "") + "다 마친 뒤 다시 submit_report를 부르세요.")
                 else:
                     report = {**args, "items": answered, "missing": missing}
                     out = "받았습니다."
+                    emit("submitted", items=len(answered))
             else:
                 out = f"없는 도구입니다: {name}"
             messages.append({"role": "tool", "tool_call_id": tool.get("id"), "content": out})

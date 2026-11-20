@@ -535,30 +535,123 @@ async function openSelfCheck(id, fields) {
   } catch (e) { m.close(); fail(e); }
 }
 
+// ── 평가 진행 (GET /evaluations/{id}/progress: 평가 Job이 1초 남짓마다 씀) ─────────
+
+const PSTEP = { wait: ["", "wait"], running: ["", "run"], done: ["✓", "ok"], warned: ["!", "warn"], failed: ["✕", "bad"], skipped: ["–", "skip"] };
+const RUN_DONE = ["passed", "failed", "stale", "error"];
+function elapsed(iso) {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분 ${s % 60}초`;
+}
+const clockOf = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
+};
+
+// What the evaluate Job is doing now. Built once and then updated in place, so the window keeps its size: the head
+// (spinner · % · what now · how long), the bar, the step chips (always one row, same places), the counts and the files
+// being read (one line each), and below them the activity, which only grows: new lines at the bottom, scrolled to
+// unless the person scrolled up to read older ones.
+const STEP_PLACEHOLDER = [["load", "버전 읽기"], ["format", "형식 검사"], ["review", "내용 검토"], ["evaluate", "품질 평가"], ["record", "기록"]]
+  .map(([name, title]) => ({ name, title, state: "wait", fraction: 0 }));
+
+function progressPanel({ compact = false } = {}) {
+  const spin = h("span", { class: "spinner" });
+  const pct = h("b", { class: "ppct" }, "0%");
+  const msg = h("span", { class: "pmsg" }, "평가 Job을 시작하는 중");
+  const ago = h("span", { class: "muted pago" });
+  const fill = h("div", { class: "pfill", style: "width:2%" });
+  const bar = h("div", { class: "pbar live" }, fill);
+  const head = h("div", { class: "phead" }, spin, pct, msg, ago);
+  if (compact) {
+    return { el: h("div", { class: "progress compact" }, head, bar), update(p) { paintHead(p); } };
+  }
+  const steps = h("ol", { class: "psteps" });
+  const counts = h("div", { class: "pcounts muted" }, " ");
+  const files = h("div", { class: "pfiles mono muted" }, " ");
+  const list = h("ul", { class: "plog-list" });
+  const job = h("div", { class: "pjob" });
+  const seen = new Set();
+  let follow = true;  // keep the newest line in view, until the person scrolls up
+  list.addEventListener("scroll", () => { follow = list.scrollTop + list.clientHeight >= list.scrollHeight - 12; });
+
+  function paintHead(p) {
+    const running = p.status !== "done";
+    spin.style.visibility = running ? "visible" : "hidden";
+    pct.textContent = `${p.percent || 0}%`;
+    msg.textContent = p.message || "";
+    ago.textContent = running && p.since && Date.now() - Date.parse(p.since) >= 3000 ? elapsed(p.since) : "";
+    fill.style.width = `${Math.max(2, p.percent || 0)}%`;
+    bar.classList.toggle("live", running);
+  }
+
+  function update(p) {
+    paintHead(p);
+    steps.replaceChildren(...((p.steps || []).length ? p.steps : STEP_PLACEHOLDER).map((s) => h("li", {
+      class: `ps ${PSTEP[s.state] ? PSTEP[s.state][1] : "wait"}`, title: s.detail || "" },
+      h("span", { class: "pdot" }, s.state === "running" ? h("span", { class: "spinner" }) : (PSTEP[s.state] || [""])[0]),
+      h("span", { class: "ptitle" }, s.title),
+      h("small", { class: "pfrac" }, s.state === "running" && s.fraction ? `${Math.round(s.fraction * 100)}%` : ""))));
+    const r = p.review;
+    counts.textContent = [r && r.files_total != null ? `파일 ${r.files_done}/${r.files_total}` : null,
+      r && r.lines_total ? `줄 ${(r.lines_read || 0).toLocaleString()}/${r.lines_total.toLocaleString()}` : null,
+      r && r.turn ? `모델 호출 ${r.turn}/${r.max_turns}` : null,
+      p.quality ? `${p.quality.done}/${p.quality.total}문항` : null].filter(Boolean).join(" · ") || " ";
+    files.textContent = r && (r.current || []).length ? `읽는 파일  ${r.current.join("  ·  ")}` : " ";
+    files.title = r && (r.current || []).length ? r.current.join("\n") : "";
+    const fresh = [...(p.events || [])].reverse().filter((e) => !seen.has(`${e.at}|${e.text}`));  // the document is newest first
+    for (const e of fresh) {
+      seen.add(`${e.at}|${e.text}`);
+      list.append(h("li", { title: e.detail || "" }, h("span", { class: "muted mono" }, clockOf(e.at)), h("span", {}, e.text)));
+    }
+    list.classList.toggle("empty", !list.children.length);
+    if (fresh.length && follow) list.scrollTop = list.scrollHeight;
+    job.replaceChildren(p.job && p.job.url ? h("a", { class: "muted", href: p.job.url, target: "_blank" }, "평가 Job 실행 화면 ↗") : "");
+  }
+
+  const el = h("div", { class: "progress" }, head, bar, steps, counts, files,
+    h("div", { class: "plog" }, h("div", { class: "plog-title muted" }, "활동 기록"), list), job);
+  update({ status: "running", percent: 0, message: "평가 Job을 시작하는 중", steps: [] });
+  return { el, update };
+}
+
+// Keep `box` on the run's progress (every 2 s) until it is done; then `onDone(progress)`. A server without the
+// progress route falls back to the run's status.
+function watchProgress(runId, box, { compact = false, onDone } = {}) {
+  const panel = progressPanel({ compact });
+  box.replaceChildren(panel.el);
+  return every(2000, async () => {
+    let p = await get(`/evaluations/${enc(runId)}/progress`).catch(() => null);
+    if (!p) {
+      const r = await get(`/evaluations/${enc(runId)}`).catch(() => null);
+      if (!r) return true;
+      p = { status: RUN_DONE.includes(r.status) ? "done" : "running", percent: RUN_DONE.includes(r.status) ? 100 : 0, message: `평가 ${r.status}` };
+    }
+    panel.update(p);
+    if (p.status === "done") { if (onDone) onDone(p); return false; }
+    return true;
+  });
+}
 function openEvaluate(id, version) {
-  const list = h("ul", { class: "steps" }, h("li", {}, h("span", { class: "mark run" }), h("div", {}, h("div", { class: "name" }, "평가 요청 중…"))));
   const status = h("div", { class: "row" }, h("b", { class: "mono" }, `${id} ${version || "(지금 개발용 정의)"}`));
+  const live = h("div", { class: "mt" }, h("div", { class: "muted" }, h("span", { class: "spinner" }), " 평가를 요청하는 중…"));
   const results = h("div", {});
-  const m = modal(`${act("evaluate")}: ${id}`, h("div", {}, status, list, results), [{ label: "닫기", run: (close) => close() }], { wide: true });
+  const m = modal(`${act("evaluate")}: ${id}`, h("div", {}, status, live, results), [{ label: "닫기", run: (close) => close() }], { wide: true });
   let finished = false;
   post(`/projects/${enc(id)}/evaluations`, { version }).then((run) => {
-    const timer = every(4000, async () => {
-      const r = await get(`/evaluations/${enc(run.validation_run_id)}`);
-      const done = ["passed", "failed", "stale", "error"].includes(r.status);
+    const timer = watchProgress(run.validation_run_id, live, { onDone: async () => {
+      const r = await get(`/evaluations/${enc(run.validation_run_id)}`).catch(() => null);
+      if (!r) return;
       const verdict = r.review ? r.review.verdict : null;
-      fill(status, h("b", { class: "mono" }, `${id} ${r.version}`), done ? evalBadge(r.status, verdict) : badge("validation", r.status),
-        h("span", { class: "muted" }, `정책 v${r.policy_version}`), done ? null : h("span", { class: "spinner" }));
-      list.replaceChildren(...(r.steps.length ? r.steps.map(stepItem) : [h("li", {}, h("span", { class: "mark run" }), h("div", {}, h("div", { class: "name" }, "평가 Job 실행 중…"),
-        h("div", { class: "detail" }, "보통 2~3분")))]));
-      fill(results, r.failure_reason && r.status === "error" ? h("div", { class: "note bad mt" }, r.failure_reason) : null,
-        done ? h("div", { class: "mt" }, reportView(r)) : null);
-      if (done && !finished) {
-        finished = true;
-        const word = ["failed", "error", "stale"].includes(r.status) || !verdict ? (LABEL.validation[r.status] || [r.status])[0] : { pass: "통과", warn: "주의 있음", fail: "부적합 있음" }[verdict];
-        toast(`평가 끝: ${id} ${r.version} · ${word}`, verdict === "pass" && r.status === "passed" ? "ok" : "bad", "아래 리포트 · 닫으면 에이전트 화면이 바뀝니다");
-      }
-      return !done;
-    });
+      fill(status, h("b", { class: "mono" }, `${id} ${r.version}`), evalBadge(r.status, verdict), h("span", { class: "muted" }, `정책 v${r.policy_version}`));
+      fill(live, h("ul", { class: "steps" }, r.steps.map(stepItem)));
+      fill(results, r.failure_reason && r.status === "error" ? h("div", { class: "note bad mt" }, r.failure_reason) : null, h("div", { class: "mt" }, reportView(r)));
+      finished = true;
+      const word = ["failed", "error", "stale"].includes(r.status) || !verdict ? (LABEL.validation[r.status] || [r.status])[0] : { pass: "통과", warn: "주의 있음", fail: "부적합 있음" }[verdict];
+      toast(`평가 끝: ${id} ${r.version} · ${word}`, verdict === "pass" && r.status === "passed" ? "ok" : "bad", "아래 리포트 · 닫으면 에이전트 화면이 바뀝니다");
+    } });
     m.onClose(() => { timer.stop(); if (finished && location.hash.startsWith(`#/agents/${enc(id)}`)) render(); });
   }).catch((e) => { m.close(); fail(e); });
 }
@@ -648,6 +741,8 @@ function followDeploy(id, version, reason, kind) {
     try { await post(`/release-gates/${enc(gateId)}/cancel`); toast("배포 요청을 취소했습니다", "ok"); } catch (e) { fail(e); }
   } }, "요청 취소");
   const m = modal("배포 진행", h("div", {}, head, list, outcome), [cancelBtn, h("button", { class: "btn", onclick: () => m.close() }, "닫기")], { wide: true });
+  const liveBox = h("div", { class: "mt-s" });
+  let watching = null;
   const item = (cls, name, detail) => h("li", {}, h("span", { class: `mark ${cls}` }, cls === "ok" ? "✓" : cls === "bad" ? "✕" : ""),
     h("div", {}, h("div", { class: "name" }, name), detail ? h("div", { class: "detail" }, detail) : null));
   post(`/projects/${enc(id)}/deploy-requests`, { version, reason }).then((gate) => {
@@ -662,7 +757,11 @@ function followDeploy(id, version, reason, kind) {
         h("span", { class: "muted" }, `${UPGRADE[g.upgrade_type] || g.upgrade_type} · 평가 ${MODE[g.validation_policy_mode]} · 승인 ${MODE[g.approval_mode] || g.approval_mode}`),
         (open && !personDecides) || g.deployment_status === "running" ? h("span", { class: "spinner" }) : null);
       const rows = [item("ok", "배포 요청", `gate ${g.gate_id} · 요청 ${g.requester}${kind === "no_code" && !version ? ` · 제안 버전 ${g.version} (배포가 성공하면 매김)` : ""}`)];
-      if (g.decision === "validating") rows.push(item("run", "평가 중", "형식 → 내용 검토 → 품질 (보통 2~3분)"));
+      const runId = g.validation_run_id || (g.evaluation && g.evaluation.validation_run_id);
+      if (g.decision === "validating") {
+        if (runId && !watching) watching = watchProgress(runId, liveBox, { compact: true });
+        rows.push(item("run", "평가 중", runId ? liveBox : "평가 Job을 시작하는 중"));
+      } else if (watching) { watching.stop(); watching = null; }
       else if (g.evaluation) {
         const verdict = g.evaluation.review ? g.evaluation.review.verdict : null;
         const word = g.evaluation.status !== "passed" || !verdict ? LABEL.validation[g.evaluation.status]?.[0] || g.evaluation.status : { pass: "통과", warn: "주의 있음", fail: "부적합 있음" }[verdict];
@@ -679,7 +778,7 @@ function followDeploy(id, version, reason, kind) {
       if (g.decision === "rejected") rows.push(item("bad", "반려", g.decision_reason || ""));
       if (g.decision === "canceled") rows.push(item("bad", "취소됨", g.decision_reason || ""));
       list.replaceChildren(...rows);
-      if (steps.some((s) => s.status === "failed")) outcome.replaceChildren(h("h3", { class: "mt" }, "평가 결과"), h("ul", { class: "steps" }, steps.map(stepItem)), resultsTable(g.evaluation.results));
+      if (g.decision !== "validating" && steps.some((s) => s.status === "failed")) outcome.replaceChildren(h("h3", { class: "mt" }, "평가 결과"), h("ul", { class: "steps" }, steps.map(stepItem)), resultsTable(g.evaluation.results));
       const done = ["rejected", "canceled"].includes(g.decision) || ["succeeded", "failed"].includes(g.deployment_status);
       if (done) {
         refreshCounts();
@@ -695,7 +794,7 @@ function followDeploy(id, version, reason, kind) {
       }
       return !done && !personDecides;
     });
-    m.onClose(() => { timer.stop(); if (location.hash.startsWith(`#/agents/${enc(id)}`)) render(); });
+    m.onClose(() => { timer.stop(); if (watching) watching.stop(); if (location.hash.startsWith(`#/agents/${enc(id)}`)) render(); });
   }).catch((e) => { m.close(); if (e.code === "gate_open" && e.data) openGateConflict(id, version, reason, kind, e.data); else fail(e); });
 }
 
@@ -823,6 +922,7 @@ function gateProgress(g, run) {
 async function gatePage(root, id) {
   const g = await get(`/release-gates/${enc(id)}`);
   const run = g.evaluation;
+  const live = h("div", {}, h("div", { class: "muted" }, "평가 Job을 시작하는 중"));
   const open = ["validating", "pending_approval"].includes(g.decision);
   const ack = h("input", { type: "checkbox", id: "ack" });
   const text = h("textarea", { placeholder: "의견 (승인) · 반려 사유 (반려는 필수)" });
@@ -862,11 +962,13 @@ async function gatePage(root, id) {
         try { await post(`/release-gates/${enc(id)}/cancel`); toast("취소했습니다", "ok"); render(); } catch (e) { fail(e); } } }, "요청 취소") : null]),
     h("div", { class: "card pad" }, gateProgress(g, run)),
     panel ? h("div", { class: "grid two mt" }, request, panel) : h("div", { class: "mt" }, request),
-    run ? h("div", { class: "card pad mt" }, h("h2", {}, "평가 리포트"), run.failure_reason ? h("div", { class: "note bad" }, run.failure_reason) : null, reportView(run))
-      : h("div", { class: "card pad mt" }, h("p", { class: "muted" }, g.decision === "validating" ? "평가 중입니다 (evaluate Job). 끝나면 리포트가 여기에 나옵니다." : "평가 기록이 없습니다")));
+    g.decision === "validating" ? h("div", { class: "card pad mt" }, h("h2", {}, "평가 진행"), live)
+      : run ? h("div", { class: "card pad mt" }, h("h2", {}, "평가 리포트"), run.failure_reason ? h("div", { class: "note bad" }, run.failure_reason) : null, reportView(run))
+        : h("div", { class: "card pad mt" }, h("p", { class: "muted" }, "평가 기록이 없습니다")));
   if (g.decision === "validating") {
-    const timer = every(5000, async () => { const now = await get(`/release-gates/${enc(id)}`); if (now.decision !== "validating") { render(); return false; } return true; });
-    void timer;
+    const runId = g.validation_run_id || (run && run.validation_run_id);
+    if (runId) watchProgress(runId, live);
+    every(5000, async () => { const now = await get(`/release-gates/${enc(id)}`); if (now.decision !== "validating") { render(); return false; } return true; });
   }
 }
 

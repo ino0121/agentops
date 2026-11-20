@@ -91,7 +91,8 @@ def parse_verdict(text: str) -> tuple[str, str]:
     return verdict, str(data.get("reason") or text[:200])
 
 
-def evaluate_skill(w: Any, files: dict[str, bytes], spec: dict[str, str], policy: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def evaluate_skill(w: Any, files: dict[str, bytes], spec: dict[str, str], policy: dict[str, Any],
+                   on_progress: Callable[[int, int, str], None] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     config = settings(policy)
     raw = files.get("evals/questions.yaml")
     questions = usable(read_questions(raw.decode("utf-8", "replace"))) if raw else []
@@ -102,7 +103,9 @@ def evaluate_skill(w: Any, files: dict[str, bytes], spec: dict[str, str], policy
     questions = questions[: int(config["max_questions"])]
     system = skill_prompt(files)
     results = []
-    for q in questions:
+    for n, q in enumerate(questions):
+        if on_progress:
+            on_progress(n, len(questions), f"평가셋 {n + 1}/{len(questions)}: {q['text'][:40]}")
         answer = chat(w, config["model"], system, q["text"])
         verdict, reason = parse_verdict(chat(w, config["judge_model"], "판정만 한다.", JUDGE.format(
             question=q["text"], expected=q.get("expected") or "(없음)", guideline=q.get("guideline") or "(없음)", answer=answer), 300))
@@ -123,7 +126,8 @@ DONE, ENDED = "DONE", ("DONE", "EVALUATION_FAILED", "EVALUATION_CANCELLED", "EVA
 
 
 def evaluate_genie(w: Any, space_id: str, spec: dict[str, str], policy: dict[str, Any], baseline: dict[str, str] | None = None,
-                   sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.time) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+                   sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.time,
+                   on_progress: Callable[[int, int, str], None] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Run the space's benchmarks and judge accuracy and regressions. `baseline`: question id → production assessment."""
     config = settings(policy)
     try:
@@ -135,6 +139,9 @@ def evaluate_genie(w: Any, space_id: str, spec: dict[str, str], policy: dict[str
     while True:
         state = w.genie.genie_get_eval_run(space_id, run_id)
         status = state.eval_run_status.value if state.eval_run_status else "NOT_STARTED"
+        if on_progress:
+            done, total = int(getattr(state, "num_done", 0) or 0), int(getattr(state, "num_questions", 0) or 0)
+            on_progress(done, total, f"Genie 벤치마크 {done}/{total or '?'}문항" + ("" if total else f" ({status})"))
         if status in ENDED:
             break
         if clock() > deadline:

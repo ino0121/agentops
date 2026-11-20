@@ -76,6 +76,7 @@
 | `agent_version_skills` | 버전마다 들어 있는 스킬과 UC Skill 이름(첫 배포 때 만들어짐)·해시 | `register` |
 | `genie_agents` | 노코드: 개발용·운영용 Genie Agent와 에이전트 폴더, 공개 그룹, warehouse | console 노코드 만들기, 배포 Job(운영용 space ID) |
 | `validation_runs` | 평가(Gate) 실행 (정책 버전, 단계별 결과, 실패 이유). `checks:review`에 승인자용 내용 검토 리포트(항목별 판정·근거·의견, 읽은 파일, 프롬프트 버전, 모델) | evaluate Job |
+| 볼륨 `aops_runs` | 평가 진행 문서 (실행마다 `<run_id>.json`, 단계·%·읽는 파일·최근 활동, 파일 내용 없음). 평가 Job이 처음 쓸 때 만들고 aops 서버가 읽음 | evaluate Job |
 | `eval_results` | 평가 문항별 결과 (판정·이유·정답·답). 노코드 운영 버전의 결과가 회귀 기준 | evaluate Job |
 | `release_gates` | 배포 요청과 판정 (`validating` → `pending_approval` → `approved`·`rejected`·`canceled`). 승인 대기 이유는 `decision_reason` | `deploy`, aops 서버 |
 | `approvals` | 승인·반려 이력 (추가만). 자동 승인은 `policy:auto` | aops 서버 |

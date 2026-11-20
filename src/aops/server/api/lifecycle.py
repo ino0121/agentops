@@ -19,7 +19,8 @@ from ...dbx.service import ServiceError
 from ...dbx.sql import loads
 from ..dbx import caller_of, service_for
 from ..events import ProgressEvent
-from .registry import AgentVersionDetail, AgentVersionSkill, Deployment, EvalResult, EvaluationRun, ValidationStep
+from .registry import (AgentVersionDetail, AgentVersionSkill, Deployment, EvalResult, EvaluationProgress, EvaluationRun,
+                       ValidationStep)
 
 router = APIRouter(tags=["검증·등록·배포"])
 
@@ -228,6 +229,18 @@ def get_evaluation(validation_run_id: str, request: Request) -> EvaluationRun:
     caller_of(request, svc)
     row = svc.evaluation(validation_run_id, results=True)
     return EvaluationRun(**{**row, "results": [EvalResult(**r) for r in row.pop("results", [])]})
+
+
+@router.get(
+    "/evaluations/{validation_run_id}/progress", summary="평가 진행 상황 (지금 단계·읽는 파일·%·최근 활동)",
+    **command(None, DBX, screen="평가 진행 화면",
+              note="평가 Job이 1초 남짓마다 쓰는 진행 문서(레지스트리 볼륨 aops_runs)를 돌려준다. 경로와 개수만, 파일 내용은 없다. "
+                   "Job이 쓰기 전에는 Job 실행 상태(준비 중 등). 끝나면 status=done이고 결과는 GET /evaluations/{id}"),
+)
+def get_evaluation_progress(validation_run_id: str, request: Request) -> EvaluationProgress:
+    svc = service_for(None)
+    caller_of(request, svc)
+    return EvaluationProgress(**svc.evaluation_progress(validation_run_id))
 
 
 @router.get(

@@ -112,6 +112,7 @@
 | `GET /api/v1/no-code/agents/{agent_id}` | 노코드 에이전트의 폴더·개발용·운영용 Genie | console 에이전트 |
 | `GET /api/v1/agents/{agent_id}/workspace` | 에이전트의 워크스페이스 폴더 (스킬·코드) | console 에이전트 |
 | `GET /api/v1/evaluations/{validation_run_id}` | 평가 결과 (단계별·문항별) | 평가 진행 화면 |
+| `GET /api/v1/evaluations/{validation_run_id}/progress` | 평가 진행 상황 (지금 단계·읽는 파일·%·최근 활동) | 평가 진행 화면 |
 | `GET /api/v1/evaluations/{validation_run_id}/events` | 평가 진행 (SSE) | 평가 진행 화면 |
 | `GET /api/v1/release-gates/{gate_id}` | 배포 심사 보기 | console 배포 요청·승인 |
 | `POST /api/v1/approvals/external` | 외부 결재 결과 받기 (확장용) |  |

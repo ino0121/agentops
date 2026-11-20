@@ -116,7 +116,8 @@ def _poll(server: Server, path: str, tries: int = 5) -> dict[str, Any]:
 
 
 def _wait_evaluation(server: Server, run_id: str) -> dict[str, Any]:
-    last = None
+    """Wait for the evaluate Job, with a line each time what it does changes (`[ 42%] 읽는 중: agent/...`)."""
+    last, said = None, None
     while True:
         run = _poll(server, f"/evaluations/{run_id}")
         if run["status"] != last:
@@ -124,6 +125,13 @@ def _wait_evaluation(server: Server, run_id: str) -> dict[str, Any]:
             last = run["status"]
         if run["status"] in DONE:
             return run
+        try:
+            progress = server.request("GET", f"/evaluations/{run_id}/progress")
+        except (ServerError, ValueError):
+            progress = None  # a server from before 0.1.0.dev24 has no progress
+        if progress and progress.get("message") and progress["message"] != said:
+            said = progress["message"]
+            _say(f"  [{int(progress.get('percent') or 0):>3}%] {said}")
         time.sleep(3)
 
 
