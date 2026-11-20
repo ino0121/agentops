@@ -125,6 +125,7 @@ aops serve                 # aops API 서버 (custom)
 - [프로젝트 폴더](docs/project.md): 폴더 구조와 `aops.toml`
 - [레지스트리·승인](docs/registry.md): 관리자 정책, aops 서버, 권한, 테이블
 - [API](docs/api.md): `aops serve`의 HTTP API와 명령 대응표
+- [앱 밖에 띄우기](docs/container.md): 컨테이너·PC의 aops 서버, Databricks OAuth 로그인, 서비스 주체
 
 ## 라이선스
 

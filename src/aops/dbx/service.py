@@ -11,6 +11,7 @@ own identity (the aops service principal in a Databricks App).
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -52,6 +53,7 @@ ADVISORY = ("review", "evaluate")
 # A passed evaluation is reused for a deploy request only if it has the approver's report (runs before 0.1.0.dev18 have none)
 WITH_REVIEW = "AND (checks:review IS NOT NULL OR checks:review_error IS NOT NULL)"
 PRINCIPAL_TTL = 300  # seconds an approver lookup is kept (the server's Service lives as long as the app)
+IDENTITY_TTL = 300  # seconds a token's account and groups are kept (a group change shows within this)
 # Gates whose code deploy runs in this server process now (a restart forgets them: see _reconcile_code_deploy)
 CODE_DEPLOYS: set[str] = set()
 # What each step checks, shown in the Job description and in every run's output. The self-check (validate) runs
@@ -108,11 +110,20 @@ class Service(NoCodeMixin, UserSpaceMixin, BrowseMixin):
         """The requester: the forwarded user from Databricks Apps, or the owner of a bearer token."""
         groups: list[str] = []
         if token:
-            me = self._as_user(token, "GET", "/api/2.0/preview/scim/v2/Me")
-            if me.get("status") == 200:
-                body = me["body"]
-                email = body.get("userName") or email  # the token's user wins over a header
-                groups = [g.get("display") for g in body.get("groups", []) if g.get("display")]
+            known = self.__dict__.setdefault("_identities", {})  # sha256(token): (email, groups, when)
+            key = hashlib.sha256(token.encode()).hexdigest()
+            hit = known.get(key)
+            if hit and time.time() - hit[2] < IDENTITY_TTL:
+                email, groups = hit[0] or email, list(hit[1])
+            else:
+                me = self._as_user(token, "GET", "/api/2.0/preview/scim/v2/Me")
+                if me.get("status") == 200:
+                    body = me["body"]
+                    email = body.get("userName") or email  # the token's user wins over a header
+                    groups = [g.get("display") for g in body.get("groups", []) if g.get("display")]
+                    if len(known) > 5000:
+                        known.clear()
+                    known[key] = (body.get("userName"), groups, time.time())
         if not email:
             raise ServiceError(401, "unauthenticated", "요청한 사람을 확인할 수 없습니다")
         return Caller(email=email, token=token, groups=groups)

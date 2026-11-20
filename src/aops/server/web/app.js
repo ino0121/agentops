@@ -22,6 +22,10 @@ async function api(method, path, { json, form, blob } = {}) {
     const raw = await resp.text();  // read once: a body that is not JSON is shown as text
     let problem;
     try { problem = JSON.parse(raw); } catch { problem = { title: raw.slice(0, 200) || `HTTP ${resp.status}` }; }
+    if (resp.status === 401 && problem.code === "login_required" && problem.data && problem.data.login) {
+      location.href = `${problem.data.login}?next=${encodeURIComponent(location.pathname + location.search + location.hash)}`;
+      return new Promise(() => {});  // the page is leaving for the login
+    }
     throw new ApiError(resp.status, problem);
   }
   if (blob) return resp;
@@ -190,7 +194,12 @@ function layout(active, crumbs, content) {
     h("div", { class: "brand" }, h("div", { class: "logo" }, "ao"), h("div", {}, "aops", h("small", {}, "AgentOps console"))),
     nav,
     h("div", { class: "side-foot" },
-      me ? [h("div", { class: "user" }, me.user), h("div", {}, me.roles.map((r) => ({ developer: "개발자", approver: "승인자", admin: "관리자" })[r]).join(" · "))] : null,
+      me ? [h("div", { class: "user" }, me.user), h("div", {}, me.roles.map((r) => ({ developer: "개발자", approver: "승인자", admin: "관리자" })[r]).join(" · ")),
+        me.login === "oauth" ? h("a", { href: "#", class: "logout", onclick: async (e) => {
+          e.preventDefault();
+          await fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => null);
+          location.href = "/auth/signed-out";
+        } }, "로그아웃") : null] : null,
       state.version ? h("div", { style: "margin-top:6px" }, `aops ${state.version.aops} · ${state.version.edition}`) : null));
   const top = h("div", { class: "topbar" }, h("div", { class: "crumbs" }, crumbs), h("div", { class: "spacer" }),
     h("a", { class: "btn small ghost", href: `${API}/docs`, target: "_blank" }, "API 문서 ↗"));

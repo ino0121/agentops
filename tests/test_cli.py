@@ -68,3 +68,38 @@ def test_admin_setup_adds_user_scopes_with_an_app_update_and_checks_them(capsys)
         admin.USER_SCOPES = original
     out = capsys.readouterr().out
     assert state["scopes"] == ["files", "genie"] and "더하지 못했습니다: bogus (Invalid scope: bogus)" in out
+
+
+def test_a_notebook_sends_its_own_token_to_a_server_outside_apps(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from aops import client
+
+    made = []
+
+    class Workspace:
+        def __init__(self, profile=None):
+            made.append(profile)
+            self.config = SimpleNamespace(authenticate=lambda: {"Authorization": "Bearer notebook-token"})
+
+    monkeypatch.setitem(sys.modules, "databricks.sdk", SimpleNamespace(WorkspaceClient=Workspace))
+    monkeypatch.setattr(client, "in_notebook", lambda: True)
+    monkeypatch.setattr(client, "notebook_app_token", lambda audience: pytest.fail("no app token exchange outside Apps"))
+    server = client.Server(url="https://aops.example.com")
+    assert server._headers() == {"Authorization": "Bearer notebook-token"} and made == [None]
+
+
+def test_a_server_that_does_not_answer_is_one_line(monkeypatch):
+    import socket
+
+    from aops import client
+
+    with socket.socket() as probe:  # a port nobody listens on
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    monkeypatch.setattr(client, "in_notebook", lambda: False)
+    server = client.Server(url=f"http://127.0.0.1:{port}")
+    monkeypatch.setattr(server, "_headers", lambda: {})
+    with pytest.raises(ValueError, match="aops 서버에 닿지 못했습니다"):
+        server.request("GET", "/meta/version")

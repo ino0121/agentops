@@ -64,6 +64,9 @@ def add_command(sub: argparse._SubParsersAction) -> None:
     setup.add_argument("--registry", required=True, help="레지스트리 스키마 <catalog>.<schema>")
     setup.add_argument("--warehouse", required=True, help="SQL warehouse ID")
     setup.add_argument("--app", default="aops-server", help="aops 서버 앱 이름")
+    setup.add_argument("--service-principal", help="서버를 앱이 아니라 컨테이너로 띄울 때: 서버가 쓰는 서비스 주체의 application ID. "
+                                                   "app 단계는 건너뛰고 grants가 이 주체에 권한(warehouse 사용 포함)을 준다 (docs/container.md)")
+    setup.add_argument("--server-url", help="앱이 아닌 서버의 주소 (https://…). Genie Code 스킬이 이 주소를 부른다")
     setup.add_argument("--approval-mode", choices=["required", "optional", "auto"], default="required")
     setup.add_argument("--validation-mode", choices=["mandatory", "optional", "exempt"], default="mandatory")
     setup.add_argument("--approver-group", default="")
@@ -88,6 +91,10 @@ def cmd_admin(args: argparse.Namespace) -> int:
     from .dbx.sql import Sql
 
     steps = [s.strip() for s in args.only.split(",")] if args.only else list(STEPS)
+    container = getattr(args, "service_principal", None)  # a server outside Databricks Apps (docs/container.md)
+    if container and "app" in steps:
+        steps.remove("app")
+        print("aops: --service-principal: 서버는 컨테이너로 띄우니 app 단계는 건너뜁니다")
     w = WorkspaceClient(profile=args.profile)
     sql = Sql(w, args.warehouse, args.registry)
     catalog, schema = args.registry.split(".")
@@ -145,12 +152,12 @@ def cmd_admin(args: argparse.Namespace) -> int:
             print(f"  {app.url}  (서비스 주체 {app.service_principal_client_id})")
 
     if "grants" in steps:
-        if app is None:
+        if app is None and not container:
             try:
                 app = w.apps.get(args.app)
             except Exception:
                 app = None
-        sp = app.service_principal_client_id if app else "<앱 서비스 주체>"
+        sp = container or (app.service_principal_client_id if app else "<앱 서비스 주체>")
         grants = [
             f"GRANT USE CATALOG ON CATALOG `{catalog}` TO `{sp}`",
             f"GRANT USE SCHEMA, CREATE VOLUME, SELECT, MODIFY ON SCHEMA `{catalog}`.`{schema}` TO `{sp}`",
@@ -169,6 +176,8 @@ def cmd_admin(args: argparse.Namespace) -> int:
             print(f"  {grant}")
         print(f"  워크스페이스 폴더 {NO_CODE_ROOT}: {sp} CAN_MANAGE (노코드 에이전트 폴더를 만들고 작성자에게 CAN MANAGE를 줌)")
         print("  노코드 에이전트가 쓰는 테이블: 운영용 Genie를 만드는 서비스 주체에 SELECT가 필요 (데이터 주인이 줌)")
+        if container:  # an app gets the warehouse as its resource; a container's service principal is given it here
+            print(f"  SQL warehouse {args.warehouse}: {sp} CAN_USE")
         if args.apply:
             failed = []
             for grant in grants:
@@ -182,7 +191,9 @@ def cmd_admin(args: argparse.Namespace) -> int:
                 print("  aops: 아래 권한은 지금 계정으로 줄 수 없습니다. 그 카탈로그·스키마의 주인에게 부탁하세요:")
                 for grant, why in failed:
                     print(f"    {grant};   -- {why}")
-            if app is not None:
+            if container:
+                _grant_warehouse(w, args.warehouse, sp)
+            if app is not None or container:
                 _put_no_code_root(w, sp)
 
     if "genie" in steps:
@@ -191,17 +202,49 @@ def cmd_admin(args: argparse.Namespace) -> int:
               f"aops 코드는 {GENIE_SOURCE}/src (읽기만, 관리자만 쓰기)")
         if args.apply:
             source = _put_genie_source(w, args, me)
-            _put_genie_skill(w, target, genie_skill(source, args.app))
+            _put_genie_skill(w, target, genie_skill(source, args.app, getattr(args, "server_url", None)))
+
+    if container:
+        print("\n[container] 서버 컨테이너의 환경 변수 (docs/container.md). 비밀값은 플랫폼 시크릿으로 넣는다")
+        for line in container_env(w.config.host, args, wheel_path if ("dist" in steps) else None):
+            print(f"  {line}")
 
     if not args.apply:
         print("\n미리보기입니다. 실행하려면 --apply를 붙이세요.")
     return 0
 
 
-def genie_skill(source: str, app: str) -> str:
-    """The workspace skill: import this aops from its source folder, then run the same CLI commands."""
+def container_env(host: str, args: argparse.Namespace, wheel_path: str | None) -> list[str]:
+    """What a container server needs: the workspace, its own service principal, the registry, the login."""
+    catalog, schema = args.registry.split(".")
+    wheel = wheel_path or f"/Volumes/{catalog}/{schema}/aops_dist/aops_cli-<version>-py3-none-any.whl"
+    return [f"DATABRICKS_HOST={host}", f"DATABRICKS_CLIENT_ID={args.service_principal}",
+            "DATABRICKS_CLIENT_SECRET=<서비스 주체의 OAuth secret>  # 시크릿",
+            f"AOPS_REGISTRY={args.registry}", f"AOPS_WAREHOUSE_ID={args.warehouse}", f"AOPS_DIST_WHEEL={wheel}",
+            "AOPS_OAUTH_CLIENT_ID=<계정 콘솔 App connections의 client ID>",
+            f"AOPS_PUBLIC_URL={getattr(args, 'server_url', None) or 'https://<서버 주소>'}",
+            "AOPS_SESSION_KEY=<Fernet 키>  # 시크릿"]
+
+
+def genie_skill(source: str, app: str, server_url: str | None = None) -> str:
+    """The workspace skill: import this aops from its source folder, then run the same CLI commands.
+    A server outside Databricks Apps is called at its address (`--server-url`) with the notebook's own token."""
     text = resources.files("aops.dbx").joinpath("genie_skill.md").read_text(encoding="utf-8")
-    return text.replace("__SRC__", source).replace("__APP__", app)
+    text = text.replace("__SRC__", source)
+    if server_url:
+        text = text.replace('os.environ["AOPS_APP"] = "__APP__"', f'os.environ["AOPS_SERVER"] = "{server_url.rstrip("/")}"')
+    return text.replace("__APP__", app)
+
+
+def _grant_warehouse(w: Any, warehouse: str, sp: str) -> None:
+    from databricks.sdk.service.sql import WarehouseAccessControlRequest, WarehousePermissionLevel
+
+    try:
+        w.warehouses.update_permissions(warehouse, access_control_list=[
+            WarehouseAccessControlRequest(service_principal_name=sp, permission_level=WarehousePermissionLevel.CAN_USE)])
+        print(f"  warehouse {warehouse}: {sp} CAN_USE")
+    except Exception as error:
+        print(f"  aops: warehouse 권한을 주지 못했습니다 ({str(error).splitlines()[0][:160]}). warehouse 주인에게 CAN_USE를 부탁하세요")
 
 
 def _put_genie_source(w: Any, args: argparse.Namespace, me: str) -> str:

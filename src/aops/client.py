@@ -51,6 +51,8 @@ class Server:
 
         if not self.notebook:
             return WorkspaceClient(profile=self.profile).config.authenticate()
+        if "databricksapps.com" not in urllib.parse.urlparse(self.url).netloc:
+            return WorkspaceClient().config.authenticate()  # a server outside Apps checks the notebook's own token
         if self._token is None:
             self._token = notebook_app_token(self._app().oauth2_app_client_id)
         return {"Authorization": f"Bearer {self._token}"}
@@ -78,6 +80,9 @@ class Server:
             except ValueError:
                 problem = {"title": text.decode(errors="replace")[:300]}
             raise ServerError(error.code, problem) from None
+        except urllib.error.URLError as error:  # nothing answers there: say so in one line, not a traceback
+            raise ValueError(f"aops 서버에 닿지 못했습니다: {self.url} ({error.reason}). "
+                             "서버가 떠 있는지, 주소(AOPS_SERVER · aops.toml [dbx] server)가 맞는지 확인하세요") from None
 
     def upload(self, path: str, fields: dict[str, str | None], file_field: str | None = None, filename: str = "",
                content: bytes = b"") -> Any:

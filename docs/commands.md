@@ -396,11 +396,14 @@ aops admin setup --profile <프로필> --registry <catalog>.<schema> --warehouse
   [--app aops-server] [--validation-mode mandatory|optional|exempt] [--approval-mode required|optional|auto] \
   [--approver-group <그룹>] [--git-connection <UC 연결> --git-owner <GitHub 조직> [--git-repo-prefix aops-] | --no-git] \
   [--users-group <그룹>] [--genie-skills <스킬 폴더>] [--only tables,policy,dist,app,grants,genie] [--apply]
+  [--service-principal <application ID> [--server-url https://…]]   # 서버를 앱 밖(컨테이너)에 띄울 때
 aops admin policy set <policy.toml>
 aops admin policy show|diff
 ```
 
 관리자만 씁니다.
+
+- **앱 밖의 서버 (`--service-principal`):** 서버를 컨테이너로 띄울 때 그 서버의 서비스 주체를 줍니다. `app` 단계는 건너뛰고 `grants`가 그 주체에 같은 권한과 warehouse `CAN_USE`를 줍니다. `--server-url`을 주면 Genie Code 스킬이 앱 대신 그 주소를 부릅니다. 끝에 컨테이너 환경 변수를 보여 줍니다([앱 밖에 띄우기](container.md)).
 
 - `setup`: 조직 공통 자원을 번들(`databricks.yml`)로 한 번 배포합니다.
   - 레지스트리 스키마와 테이블
@@ -434,8 +437,8 @@ dbx 기능을 HTTP API 서버로 엽니다. 조직의 웹·서비스가 자기 �
 
 - **API:** REST `/api/v1`과 실행 스트림 SSE(AG-UI 이벤트)입니다. OpenAPI 문서는 `/api/v1/openapi.json`입니다. CLI 명령과 API는 같은 기능입니다.
 - **오래 걸리는 일:** 검증·배치·평가는 `202`와 상태를 돌려주고 진행을 스트림으로 흘립니다. 스트림은 주기적으로 신호를 보내고, 끊기면 `Last-Event-ID`로 이어 받습니다.
-- **위치:** 조직 서버나 컨테이너에서 이 명령으로 띄웁니다. Databricks App(aops 서버)은 `aops admin setup`이 배포합니다.
-- **인증:** Databricks OAuth 토큰(`Authorization: Bearer`)만 받습니다. 사람 권한이 필요한 확인은 그 사람 권한으로, 레지스트리 기록·Job 실행·권한 변경은 서비스 주체로 합니다.
+- **위치:** 조직 서버나 컨테이너에서 이 명령으로 띄웁니다(`deploy/container/Dockerfile`, [앱 밖에 띄우기](container.md)). Databricks App(aops 서버)은 `aops admin setup`이 배포합니다.
+- **인증:** CLI·서비스는 Databricks OAuth 토큰(`Authorization: Bearer`)을 보냅니다. 앱 밖의 브라우저는 서버의 Databricks OAuth 로그인(`/auth/login`, 계정의 App connection, `AOPS_OAUTH_CLIENT_ID`)으로 들어오고, 세션은 암호화 쿠키에만 둡니다. 사람 권한이 필요한 일은 그 사람 토큰으로, 레지스트리 기록·Job 실행·권한 변경은 서버 서비스 주체로 합니다. 역할은 그 토큰의 Databricks 그룹으로 정합니다.
 - **실행:** 하네스는 세션마다 Databricks Sandbox에서 돕니다. 프로젝트는 Workspace 폴더(Git 폴더)나 UC Volume에 둡니다.
 - `/`는 console 화면입니다([console](console.md)). 요청·응답 형식은 `/api/v1/docs`에서 보고, 명령 ↔ API 대응은 `GET /api/v1/meta/commands`로 받습니다.
 - `--cors-origin`: 다른 도메인의 브라우저 화면이 직접 부를 때 허용할 주소입니다. 조직 서버에서 띄울 때만 씁니다.

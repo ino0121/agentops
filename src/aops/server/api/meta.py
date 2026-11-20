@@ -26,6 +26,8 @@ class Me(BaseModel):
     user: str = Field(examples=["dev@example.com"], description="토큰의 Databricks 계정")
     groups: list[str] = Field(examples=[["agent-developers"]])
     roles: list[Literal["developer", "approver", "admin"]] = Field(examples=[["developer"]])
+    login: Literal["apps", "oauth", "token", "local"] | None = Field(
+        None, description="이 요청이 들어온 길: apps(Databricks Apps), oauth(이 서버의 로그인, 로그아웃 가능), token(bearer), local(PC 프로필)")
 
 
 class CommandRow(BaseModel):
@@ -47,10 +49,10 @@ def version(request: Request) -> Version:
 
 @router.get("/me", summary="내 계정·역할", dependencies=[Depends(bearer)], **command(None, ALL, screen="모든 화면 (권한별 버튼 표시)"))
 def me(request: Request) -> Me:
-    from ..dbx import caller_of, service_for
+    from ..dbx import caller_of, login_kind, service_for
 
     svc = service_for(None)
-    return Me(**svc.me(caller_of(request, svc)))
+    return Me(**svc.me(caller_of(request, svc)), login=login_kind(request))
 
 
 @router.get("/commands", summary="명령 ↔ API 대응표")

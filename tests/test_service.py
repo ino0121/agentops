@@ -261,3 +261,18 @@ def test_atomic_block_keeps_each_statement_parameters_apart():
     assert "UPDATE t SET v = :s0_v WHERE a = :s0_a;" in body
     assert "INSERT INTO e VALUES (:s1_a, '10:30', CAST(:s1_v AS STRING), x::int);" in body
     assert params == {"s0_a": "x", "s0_v": "1", "s1_a": "y", "s1_v": "2"}
+
+
+def test_a_tokens_account_is_kept_for_a_while():
+    svc = object.__new__(Service)
+    asked = []
+    svc._as_user = lambda token, method, path, body=None: asked.append(token) or {
+        "status": 200, "body": {"userName": "dev@x.com", "groups": [{"display": "admins"}]}}
+    first = svc.identify("tok", None)
+    again = svc.identify("tok", None)
+    assert (first.email, first.groups) == (again.email, again.groups) == ("dev@x.com", ["admins"]) and asked == ["tok"]
+    svc.identify("other", None)
+    assert asked == ["tok", "other"]
+    svc._as_user = lambda token, method, path, body=None: {"status": 401, "body": {}}
+    with pytest.raises(Exception):
+        svc.identify("bad", None)  # a token SCIM does not take is not kept, and names nobody

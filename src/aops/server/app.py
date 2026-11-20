@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 
 from .. import __version__
+from . import auth
 from .api import admin, batches, browse, evaluations, lifecycle, meta, monitor, ops, projects, registry, sessions
 from ..dbx.service import ServiceError
 from .common import NotImplementedYet, Problem, bearer
@@ -58,6 +59,11 @@ def create_app(*, edition: str = "custom", cors_origins: list[str] | None = None
         redoc_url=f"{PREFIX}/redoc",
     )
     app.state.edition = edition
+    # Outside Databricks Apps the server logs people in itself when an OAuth app is configured (server/auth.py)
+    app.state.oauth = auth.OAuth.from_env()
+    if app.state.oauth is not None:
+        app.include_router(auth.router)
+        app.middleware("http")(auth.middleware)
     secured = [Depends(bearer)]
     for module in (projects, browse, sessions, batches, evaluations, lifecycle, registry, monitor, ops, admin):
         app.include_router(module.router, prefix=PREFIX, dependencies=secured)
