@@ -148,7 +148,7 @@ def canned_review(monkeypatch):
     """The content review is a model call: every Gate test gets this report unless it sets its own."""
     from aops.dbx import review
 
-    monkeypatch.setattr(review, "review", lambda w, files, kind, prompts, policy, agent_id: dict(REVIEW))
+    monkeypatch.setattr(review, "review", lambda w, files, kind, prompts, policy, agent_id, **k: dict(REVIEW))
 
 
 def gate_service(files, kind="skill"):
@@ -171,7 +171,7 @@ def gate_service(files, kind="skill"):
 
 def test_gate_runs_the_form_checks_then_the_evaluation_and_records_each_question(monkeypatch):
     svc = gate_service(skill_files())
-    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy: (
+    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy, **k: (
         {"name": "evaluate", "status": "passed", "detail": "정확도 100%"},
         [{"question_id": "q1", "question": "10개면?", "assessment": "GOOD", "reasons": ["맞음"], "expected": "5%", "generated": "5%"}]))
     report = svc.run_evaluation("r1")
@@ -187,8 +187,8 @@ def test_review_and_quality_findings_go_to_the_approver_and_stop_auto_approval(m
 
     svc = gate_service(skill_files())
     failing = {**REVIEW, "verdict": "fail", "items": [{**REVIEW["items"][0], "status": "fail"}]}
-    monkeypatch.setattr(review, "review", lambda *a: failing)
-    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy: ({"name": "evaluate", "status": "failed", "detail": "정확도 50%"}, []))
+    monkeypatch.setattr(review, "review", lambda *a, **k: failing)
+    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy, **k: ({"name": "evaluate", "status": "failed", "detail": "정확도 50%"}, []))
     report = svc.run_evaluation("r1")
     steps = {s["name"]: s for s in report["steps"]}
     assert report["status"] == "passed"  # advisory: not rejected by the Gate itself
@@ -200,11 +200,11 @@ def test_review_and_quality_findings_go_to_the_approver_and_stop_auto_approval(m
 def test_a_review_that_cannot_run_goes_to_the_approver(monkeypatch):
     from aops.dbx import review
 
-    def broken(*a):
+    def broken(*a, **k):
         raise review.ReviewError("검토 모델을 부르지 못했습니다")
 
     monkeypatch.setattr(review, "review", broken)
-    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy: ({"name": "evaluate", "status": "passed", "detail": "ok"}, []))
+    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy, **k: ({"name": "evaluate", "status": "passed", "detail": "ok"}, []))
     svc = gate_service(skill_files())
     report = svc.run_evaluation("r1")
     step = next(s for s in report["steps"] if s["name"] == "review")
@@ -217,11 +217,11 @@ def test_a_review_that_cannot_run_goes_to_the_approver(monkeypatch):
 def test_any_failure_of_the_review_is_still_the_approvers_call(monkeypatch):
     from aops.dbx import review
 
-    def odd(*a):
+    def odd(*a, **k):
         raise ValueError("bad tool argument")
 
     monkeypatch.setattr(review, "review", odd)
-    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy: ({"name": "evaluate", "status": "passed", "detail": "ok"}, []))
+    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda w, files, spec, policy, **k: ({"name": "evaluate", "status": "passed", "detail": "ok"}, []))
     svc = gate_service(skill_files())
     report = svc.run_evaluation("r1")
     step = next(s for s in report["steps"] if s["name"] == "review")
@@ -253,7 +253,7 @@ def test_gate_does_not_spend_on_evaluation_when_the_form_fails(monkeypatch):
     files = skill_files()
     files["SPEC.md"] = SPEC.replace("service_criticality: low", "service_criticality: huge").encode()
     svc = gate_service(files)
-    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda *a: pytest.fail("evaluated a malformed agent"))
+    monkeypatch.setattr(gate_eval, "evaluate_skill", lambda *a, **k: pytest.fail("evaluated a malformed agent"))
     report = svc.run_evaluation("r1")
     evaluate = next(s for s in report["steps"] if s["name"] == "evaluate")
     assert evaluate["status"] == "skipped" and report["status"] == "failed"
@@ -278,7 +278,7 @@ def test_no_code_gate_runs_benchmarks_on_the_dev_space_then_integrity(monkeypatc
     svc.genie_agent = lambda a: {"dev_space_id": "dev1"}
     svc._eval_baseline = lambda a: None
     asked = []
-    monkeypatch.setattr(gate_eval, "evaluate_genie", lambda w, space, spec_, policy, baseline: (
+    monkeypatch.setattr(gate_eval, "evaluate_genie", lambda w, space, spec_, policy, baseline, **k: (
         asked.append(space) or {"name": "evaluate", "status": "passed", "detail": "ok"}, []))
     monkeypatch.setattr(nocode, "check_steps", lambda files_, policy, lookup=None: [{"name": "format", "status": "passed", "detail": ""},
                                                                        {"name": "definition", "status": "passed", "detail": ""}])

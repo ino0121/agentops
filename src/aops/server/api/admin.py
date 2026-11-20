@@ -188,11 +188,11 @@ def set_review_prompt(body: ReviewPromptChange, request: Request) -> ReviewPromp
     return ReviewPrompt(**svc.set_review_prompt(caller_of(request, svc), body.kind, body.body, body.note))
 
 
-@router.get("/rate-cards", summary="모델 단가표", **command(None, DBX, screen="console 관리자 · 단가표"))
+@router.get("/rate-cards", summary="모델 단가표 (설계)", **command(None, DBX, screen="(설계) console 관리자 · 단가표"))
 def list_rate_cards() -> list[RateCard]:
     raise todo(None)
 
 
-@router.put("/rate-cards", summary="모델 단가표 바꾸기", **command(None, DBX, screen="console 관리자 · 단가표"))
+@router.put("/rate-cards", summary="모델 단가표 바꾸기 (설계)", **command(None, DBX, screen="(설계) console 관리자 · 단가표"))
 def put_rate_cards(body: list[RateCard]) -> list[RateCard]:
     raise todo(None)

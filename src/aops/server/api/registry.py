@@ -183,6 +183,60 @@ class EvaluationRun(BaseModel):
     ended_at: datetime | None = None
 
 
+class ProgressStep(BaseModel):
+    name: str = Field(examples=["review"], description="load · format · review · evaluate · integrity · record")
+    title: str = Field(examples=["내용 검토"])
+    state: Literal["wait", "running", "done", "warned", "failed", "skipped"]
+    fraction: float = Field(0.0, description="이 단계가 얼마나 됐는지 (0~1, 진행 중일 때)")
+    detail: str | None = None
+
+
+class ReviewProgress(BaseModel):
+    turn: int | None = Field(None, description="모델 호출 몇 번째")
+    max_turns: int | None = None
+    files_done: int | None = Field(None, description="다 읽은 필수 파일")
+    files_total: int | None = None
+    lines_read: int | None = None
+    lines_total: int | None = None
+    current: list[str] = Field(default_factory=list, description="지금 읽는 파일 (경로만)")
+
+
+class QualityProgress(BaseModel):
+    done: int
+    total: int
+    label: str = Field(examples=["평가셋 3/10: 50개 주문하면 합계는?"])
+
+
+class ProgressActivity(BaseModel):
+    at: str = Field(examples=["2026-11-20T01:02:03Z"])
+    text: str = Field(examples=["읽는 중: agent/tools/order_lookup.py (1~31줄)"])
+    detail: str | None = Field(None, examples=["검색 패턴: https?://|TODO"], description="정확한 내용 (검색 패턴 등). 화면은 마우스를 올리면 보여 줌")
+
+
+class JobState(BaseModel):
+    state: str | None = Field(None, examples=["PENDING"], description="평가 Job 실행의 상태 (진행 문서가 생기기 전)")
+    url: str | None = Field(None, description="Job 실행 화면")
+
+
+class EvaluationProgress(BaseModel):
+    """What the evaluate Job is doing now: written by the Job about once a second (volume aops_runs), paths and counts only."""
+
+    run_id: str
+    status: Literal["running", "done"]
+    run_status: RunStatus | None = Field(None, description="평가 실행 자체의 상태 (끝나면 결과를 GET /evaluations/{id}로)")
+    stage: str | None = Field(None, examples=["review"], description="지금 단계. queued: Job이 아직 진행을 쓰기 전")
+    percent: int = Field(0, ge=0, le=100)
+    message: str = Field(examples=["모델이 다음 할 일을 정하는 중 (호출 5/24)"])
+    since: str | None = Field(None, description="지금 일을 시작한 시각 (경과 시간 표시)")
+    started_at: str | None = None
+    updated_at: str | None = None
+    steps: list[ProgressStep] = Field(default_factory=list)
+    review: ReviewProgress | None = None
+    quality: QualityProgress | None = None
+    events: list[ProgressActivity] = Field(default_factory=list, description="최근 활동, 새것부터 (최대 40)")
+    job: JobState | None = None
+
+
 class Deployment(BaseModel):
     deployment_id: str = Field(examples=["d-31"])
     gate_id: str | None = Field(None, description="`--dev` 개인 시험 배포는 비어 있음")

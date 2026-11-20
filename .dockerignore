@@ -1,0 +1,12 @@
+# The image takes the package only: no local environments, caches, tests or secrets
+.git
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+dist
+build
+*.egg-info
+.env*
+tests
+**/.DS_Store

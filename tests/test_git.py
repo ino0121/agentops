@@ -220,3 +220,23 @@ def test_cli_inside_a_notebook_exchanges_the_notebook_login(monkeypatch):
     assert server.url == "https://aops-server-1.aws.databricksapps.com" and server.profile is None
     assert server._headers() == {"Authorization": "Bearer tok"} and server._headers() == {"Authorization": "Bearer tok"}
     assert asked == ["app-aud"]  # exchanged once per command
+
+
+def test_genie_skill_calls_a_server_outside_apps_at_its_address():
+    from aops.admin import genie_skill
+
+    text = genie_skill("/Workspace/aops/genie/src", "aops-server", "https://aops.example.com/")
+    assert 'os.environ["AOPS_SERVER"] = "https://aops.example.com"' in text and "AOPS_APP" not in text.split("```python")[1].split("```")[0]
+
+
+def test_container_env_lists_what_the_server_needs():
+    from types import SimpleNamespace
+
+    from aops.admin import container_env
+
+    args = SimpleNamespace(registry="main.aops", warehouse="w1", service_principal="sp-app-id", server_url="https://aops.example.com")
+    env = container_env("https://ws.example.com", args, "/Volumes/main/aops/aops_dist/aops_cli-1-py3-none-any.whl")
+    names = [line.split("=")[0] for line in env]
+    assert names == ["DATABRICKS_HOST", "DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET", "AOPS_REGISTRY", "AOPS_WAREHOUSE_ID",
+                     "AOPS_DIST_WHEEL", "AOPS_OAUTH_CLIENT_ID", "AOPS_PUBLIC_URL", "AOPS_SESSION_KEY"]
+    assert "DATABRICKS_CLIENT_ID=sp-app-id" in env and "AOPS_PUBLIC_URL=https://aops.example.com" in env

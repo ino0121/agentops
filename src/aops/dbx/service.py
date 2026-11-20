@@ -11,6 +11,7 @@ own identity (the aops service principal in a Databricks App).
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -27,6 +28,7 @@ from ..validate import FORBIDDEN_FILES, SECRET_PATTERNS, SKILL_NAME, find_secret
 from ..hashing import skills_sha256
 from . import code, gate_eval, genie_rules, nocode, review
 from .base import AGENT_ID, CRITICALITY, SENSITIVITY, VERSION_COLUMNS, Caller, ServiceError, clean_note, gate_open_error, now_id
+from .progress import Progress
 from .git import GitHub, GitSettings, commit_message, proxy_transport
 from .browse import BrowseMixin
 from .nocode import NoCodeMixin
@@ -52,6 +54,7 @@ ADVISORY = ("review", "evaluate")
 # A passed evaluation is reused for a deploy request only if it has the approver's report (runs before 0.1.0.dev18 have none)
 WITH_REVIEW = "AND (checks:review IS NOT NULL OR checks:review_error IS NOT NULL)"
 PRINCIPAL_TTL = 300  # seconds an approver lookup is kept (the server's Service lives as long as the app)
+IDENTITY_TTL = 300  # seconds a token's account and groups are kept (a group change shows within this)
 # Gates whose code deploy runs in this server process now (a restart forgets them: see _reconcile_code_deploy)
 CODE_DEPLOYS: set[str] = set()
 # What each step checks, shown in the Job description and in every run's output. The self-check (validate) runs
@@ -108,11 +111,20 @@ class Service(NoCodeMixin, UserSpaceMixin, BrowseMixin):
         """The requester: the forwarded user from Databricks Apps, or the owner of a bearer token."""
         groups: list[str] = []
         if token:
-            me = self._as_user(token, "GET", "/api/2.0/preview/scim/v2/Me")
-            if me.get("status") == 200:
-                body = me["body"]
-                email = body.get("userName") or email  # the token's user wins over a header
-                groups = [g.get("display") for g in body.get("groups", []) if g.get("display")]
+            known = self.__dict__.setdefault("_identities", {})  # sha256(token): (email, groups, when)
+            key = hashlib.sha256(token.encode()).hexdigest()
+            hit = known.get(key)
+            if hit and time.time() - hit[2] < IDENTITY_TTL:
+                email, groups = hit[0] or email, list(hit[1])
+            else:
+                me = self._as_user(token, "GET", "/api/2.0/preview/scim/v2/Me")
+                if me.get("status") == 200:
+                    body = me["body"]
+                    email = body.get("userName") or email  # the token's user wins over a header
+                    groups = [g.get("display") for g in body.get("groups", []) if g.get("display")]
+                    if len(known) > 5000:
+                        known.clear()
+                    known[key] = (body.get("userName"), groups, time.time())
         if not email:
             raise ServiceError(401, "unauthenticated", "요청한 사람을 확인할 수 없습니다")
         return Caller(email=email, token=token, groups=groups)
@@ -677,6 +689,51 @@ class Service(NoCodeMixin, UserSpaceMixin, BrowseMixin):
                      {"j": job_run, "r": run_id})
         return self.evaluation(run_id)
 
+    def _progress_path(self, run_id: str) -> str:
+        return f"/Volumes/{self.config.catalog}/{self.config.schema}/aops_runs/{run_id}.json"
+
+    def _progress(self, run_id: str) -> Progress:
+        """The evaluate Job's live document in the registry volume aops_runs (made here by the aops service principal,
+        which reads it back in the server). If the volume cannot be made, the evaluation runs without it."""
+        try:
+            self.sql.run(f"CREATE VOLUME IF NOT EXISTS {self.config.registry}.aops_runs "
+                         "COMMENT 'aops 평가 진행 상황: 평가 Job이 쓰고 aops 서버가 읽는다 (실행마다 JSON 하나)'")
+        except Exception:
+            return Progress(run_id)
+        path = self._progress_path(run_id)
+
+        def sink(document: dict[str, Any]) -> None:
+            self.w.files.upload(path, io.BytesIO(json.dumps(document, ensure_ascii=False).encode("utf-8")), overwrite=True)
+
+        return Progress(run_id, sink)
+
+    def evaluation_progress(self, run_id: str) -> dict[str, Any]:
+        """What the evaluate Job is doing now. Before it writes anything: the Job run's own state (queued, starting)."""
+        run = self.evaluation(run_id)
+        finished = run.get("status") in ("passed", "failed", "stale", "error")
+        try:
+            document = json.loads(self.w.files.download(self._progress_path(run_id)).contents.read())
+        except Exception:
+            document = None
+        if document:
+            return {**document, "run_status": run.get("status")}
+        job = None
+        if run.get("job_run_id"):
+            try:
+                found = self.w.jobs.get_run(int(run["job_run_id"]))
+                state = found.state.life_cycle_state.value if found.state and found.state.life_cycle_state else None
+                job = {"state": state, "url": found.run_page_url}
+            except Exception:
+                job = None
+        waiting = {"PENDING": "평가 Job을 준비하는 중 (서버리스 시작, 보통 30초~1분)", "QUEUED": "평가 Job이 차례를 기다리는 중",
+                   "RUNNING": "평가 Job이 시작됐습니다 (aops를 설치하는 중)", "BLOCKED": "평가 Job이 차례를 기다리는 중"}
+        message = ("평가가 끝났습니다" if finished else waiting.get((job or {}).get("state") or "", "평가 Job을 시작하는 중"))
+        started = run.get("started_at")
+        return {"run_id": run_id, "status": "done" if finished else "running", "run_status": run.get("status"),
+                "stage": None if finished else "queued", "percent": 100 if finished else 0, "message": message,
+                "since": started, "started_at": started, "updated_at": None, "steps": [], "review": None, "quality": None,
+                "events": [], "job": job}
+
     def evaluation(self, run_id: str, results: bool = False) -> dict[str, Any]:
         row = self.sql.one(f"SELECT * FROM {self.sql.table('validation_runs')} WHERE validation_run_id = :r", {"r": run_id})
         if not row:
@@ -705,6 +762,8 @@ class Service(NoCodeMixin, UserSpaceMixin, BrowseMixin):
         """
         run = self.evaluation(run_id)
         self.sql.run(f"UPDATE {self.sql.table('validation_runs')} SET status = 'running' WHERE validation_run_id = :r", {"r": run_id})
+        progress = self._progress(run_id)
+        progress.begin("load", "버전 zip을 읽는 중")
         steps: list[dict[str, Any]] = []
         results: list[dict[str, Any]] = []
         checks: dict[str, Any] = {}
@@ -723,28 +782,40 @@ class Service(NoCodeMixin, UserSpaceMixin, BrowseMixin):
             _, policy = self.policy()
             stale = benchmarked = False
             kind = agent.get("build_type") or validate.kind_of(files)
+            progress.kind(kind)
+            progress.end("load", "done", f"파일 {len(files)}개")
+            progress.begin("format", "형식 검사 (셀프 체크 규칙)")
             steps = (nocode.check_steps(files, policy, self.principal_exists) if kind == "no_code"
                      else check_agent(files, policy, self.principal_exists))
+            progress.end("format", "failed" if any(s["status"] == "failed" for s in steps) else "done",
+                         f"규칙 {sum(len(s.get('rules') or []) for s in steps)}개")
             if any(s["status"] == "failed" for s in steps):
                 steps.append({"name": "review", "status": "skipped", "detail": "형식 검사(ERROR)가 실패해 내용 검토를 하지 않았습니다"})
                 steps.append({"name": "evaluate", "status": "skipped", "detail": "앞 검사가 실패해 평가를 돌리지 않았습니다"})
             else:
                 # the content review: a model reads every file against the admin's prompts (the approver's report).
                 # If it cannot run, the approver is told so; the request is not rejected for it (and not auto-approved).
+                progress.begin("review", "내용 검토를 시작합니다 (모델이 도구로 모든 파일을 읽음)")
                 try:
-                    checks["review"] = review.review(self.w, files, kind, self.active_prompts(), policy, run["agent_id"])
+                    checks["review"] = review.review(self.w, files, kind, self.active_prompts(), policy, run["agent_id"],
+                                                     on_event=progress.review_event)
                     steps.append(review.step(checks["review"]))
+                    progress.end("review", {"pass": "done", "warn": "warned"}.get(checks["review"]["verdict"], "failed"),
+                                 f"판정 {checks['review']['verdict']}")
                 except Exception as error:  # ReviewError, or anything else on the way (prompts, a tool): still the approver's call
                     error = error if isinstance(error, review.ReviewError) else f"{type(error).__name__}: {str(error)[:300]}"
                     checks["review_error"] = str(error)
                     steps.append({"name": "review", "status": "failed", "advisory": True,
                                   "detail": f"내용 검토를 하지 못했습니다: {error}. 승인자가 파일을 직접 확인하거나 다시 평가를 요청합니다"})
+                    progress.end("review", "failed", "내용 검토를 하지 못함")
                 if kind == "no_code":
                     # Benchmarks run on the dev space, so they speak for this content only while the dev definition is it
                     genie = self.genie_agent(run["agent_id"]) or {}
                     live = genie_rules.definition_hash(self._dev_definition(genie))
                     if live == genie_rules.definition_hash(nocode.definition_of(files)):
-                        step, results = gate_eval.evaluate_genie(self.w, genie["dev_space_id"], spec, policy, self._eval_baseline(run["agent_id"]))
+                        progress.begin("evaluate", "Genie 벤치마크를 시작합니다")
+                        step, results = gate_eval.evaluate_genie(self.w, genie["dev_space_id"], spec, policy, self._eval_baseline(run["agent_id"]),
+                                                                 on_progress=progress.quality_event)
                         steps.append(step)
                         benchmarked = True
                     elif snapshot:
@@ -755,15 +826,24 @@ class Service(NoCodeMixin, UserSpaceMixin, BrowseMixin):
                 elif kind == "code":
                     steps.append(gate_eval.skipped_for_code())
                 else:
-                    step, results = gate_eval.evaluate_skill(self.w, files, spec, policy)
+                    progress.begin("evaluate", "평가셋 채점을 시작합니다")
+                    step, results = gate_eval.evaluate_skill(self.w, files, spec, policy, on_progress=progress.quality_event)
                     steps.append(step)
             for s in steps:
                 if s["name"] in ADVISORY:
                     s["advisory"] = True  # shown to the approver; it does not reject the request
+            evaluated = next((s for s in steps if s["name"] == "evaluate"), None)
+            if evaluated:
+                progress.end("evaluate", {"passed": "done", "skipped": "skipped"}.get(evaluated["status"], "failed"), evaluated.get("detail"))
+            if any(s["name"] == "review" and s["status"] == "skipped" for s in steps):
+                progress.end("review", "skipped", "형식 검사 실패")
             if kind == "no_code" and (snapshot or benchmarked):  # after the benchmarks: the dev definition must not have moved
+                progress.begin("integrity", "개발용 정의가 그대로인지 확인하는 중")
                 integrity = self.integrity_step(run["agent_id"], files)
+                progress.end("integrity", "done" if integrity["status"] == "passed" else "failed")
                 steps.append(integrity)
                 stale = integrity["status"] == "failed"
+            progress.begin("record", "결과를 레지스트리에 기록하는 중")
             same = package.files_sha256(list(files.items())) == run["source_sha256"]
             what = "스냅샷이 요청 때" if snapshot else "버전 zip이 등록 때"
             steps.append({"name": "record", "status": "passed" if same else "failed",
@@ -787,6 +867,8 @@ class Service(NoCodeMixin, UserSpaceMixin, BrowseMixin):
         statements.append(self._event_statement(run["agent_id"], run["version"], "evaluate", run["started_by"],
                                                 {"status": status, "validation_run_id": run_id, "questions": len(results), "review": verdict}))
         self.sql.atomic(statements)
+        progress.end("record", "done")
+        progress.finish(status, reason)
         return {**report, "status": status, "reason": reason, "steps": steps, "results": results, "review": checks.get("review")}
 
     run_validation = run_evaluation  # the Job of servers before 0.1.0.dev16 calls it by this name

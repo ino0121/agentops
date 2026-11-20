@@ -1,8 +1,8 @@
 # 레지스트리·승인 (dbx)
 
-[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md)
+[README](../README.md) · [개요](overview.md) · [명령어](commands.md) · [프로젝트 폴더](project.md) · [레지스트리·승인](registry.md) · [API](api.md) · [console](console.md) · [앱 밖에 띄우기](container.md)
 
-> **지금 동작하는 범위:** 스킬 기반·코드 기반·노코드(벤치마크 평가 제외). 정책은 `aops admin setup`의 옵션이나 console 정책 화면(관리자)으로 정하고, 승인은 console 배포 요청함이나 `aops gates`·`approve`·`reject`(aops 서버의 승인 API)로 합니다. `aops admin policy`는 설계입니다. 아래에서 **지금:**으로 표시한 줄이 현재 구현입니다.
+> **지금 동작하는 범위:** 스킬 기반·코드 기반·노코드(코드 기반의 품질 평가 제외). 정책은 `aops admin setup`의 옵션이나 console 정책 화면(관리자)으로 정하고, 승인은 console 배포 요청함이나 `aops gates`·`approve`·`reject`(aops 서버의 승인 API)로 합니다. `aops admin policy`는 설계입니다. 아래에서 **지금:**으로 표시한 줄이 현재 구현입니다.
 
 ## 관리자 정책
 
@@ -39,7 +39,7 @@
 - **모니터링:** `aops monitor`와 같은 데이터
 - **배포 이력**
 - 레지스트리 쓰기, Job 실행, UC Skill·권한 변경은 서버의 서비스 주체가 합니다. 사람은 요청만 하고, 레지스트리는 조회만 합니다.
-- **지금:** API만 엽니다(경로 79개 중 14개 동작, [API](api.md)). console 화면과 모니터링은 아직 없어서, 승인자는 `aops gates`로 대기 요청을 보고 `aops approve`·`aops reject`로 결재합니다(같은 승인 API). 요청자 본인 승인·반려와 승인 그룹 밖의 결재는 서버가 막고, 요청자는 `aops deploy --cancel`로 취소합니다. 서버 코드는 `/Workspace/aops/server/<앱>`에 있고 워크스페이스 관리자만 고칠 수 있습니다.
+- **지금:** API와 console 화면(에이전트·배포 요청함·정책 등)이 동작합니다. 승인자는 console 배포 요청함이나 `aops gates`·`aops approve`·`aops reject`로 결재합니다(같은 승인 API). 모니터링 화면과 세션 실행 경로는 아직 없고 [API](api.md)의 "지금 상태"대로 `501`입니다. 요청자 본인 승인·반려와 승인 그룹 밖의 결재는 서버가 막고, 요청자는 `aops deploy --cancel`로 취소합니다. 서버 코드는 `/Workspace/aops/server/<앱>`에 있고 워크스페이스 관리자만 고칠 수 있습니다.
 
 ## 권한과 가져오기
 
@@ -65,7 +65,7 @@
 
 ## 레지스트리 테이블
 
-`[dbx] registry` 스키마의 Unity Catalog managed Delta 테이블 14개와 뷰 1개입니다. 정의는 [`bundles/registry/tables.sql`](../bundles/registry/tables.sql)에 있고, `aops admin setup`이 만듭니다. 모든 테이블·컬럼에 한글 설명이 있으며 허용 값은 CHECK 제약으로 막습니다. 쓰기는 aops 서비스 주체만 하고, 사람에게는 조회 권한만 줍니다.
+`[dbx] registry` 스키마의 Unity Catalog managed Delta 테이블 15개와 뷰 1개입니다. 정의는 [`bundles/registry/tables.sql`](../bundles/registry/tables.sql)에 있고, `aops admin setup`이 만듭니다. 모든 테이블·컬럼에 한글 설명이 있으며 허용 값은 CHECK 제약으로 막습니다. 쓰기는 aops 서비스 주체만 하고, 사람에게는 조회 권한만 줍니다.
 
 | 테이블 | 내용 | 쓰는 곳 |
 | --- | --- | --- |
@@ -76,6 +76,7 @@
 | `agent_version_skills` | 버전마다 들어 있는 스킬과 UC Skill 이름(첫 배포 때 만들어짐)·해시 | `register` |
 | `genie_agents` | 노코드: 개발용·운영용 Genie Agent와 에이전트 폴더, 공개 그룹, warehouse | console 노코드 만들기, 배포 Job(운영용 space ID) |
 | `validation_runs` | 평가(Gate) 실행 (정책 버전, 단계별 결과, 실패 이유). `checks:review`에 승인자용 내용 검토 리포트(항목별 판정·근거·의견, 읽은 파일, 프롬프트 버전, 모델) | evaluate Job |
+| 볼륨 `aops_runs` | 평가 진행 문서 (실행마다 `<run_id>.json`, 단계·%·읽는 파일·최근 활동, 파일 내용 없음). 평가 Job이 처음 쓸 때 만들고 aops 서버가 읽음 | evaluate Job |
 | `eval_results` | 평가 문항별 결과 (판정·이유·정답·답). 노코드 운영 버전의 결과가 회귀 기준 | evaluate Job |
 | `release_gates` | 배포 요청과 판정 (`validating` → `pending_approval` → `approved`·`rejected`·`canceled`). 승인 대기 이유는 `decision_reason` | `deploy`, aops 서버 |
 | `approvals` | 승인·반려 이력 (추가만). 자동 승인은 `policy:auto` | aops 서버 |

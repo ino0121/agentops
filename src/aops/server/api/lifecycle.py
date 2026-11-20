@@ -19,7 +19,8 @@ from ...dbx.service import ServiceError
 from ...dbx.sql import loads
 from ..dbx import caller_of, service_for
 from ..events import ProgressEvent
-from .registry import AgentVersionDetail, AgentVersionSkill, Deployment, EvalResult, EvaluationRun, ValidationStep
+from .registry import (AgentVersionDetail, AgentVersionSkill, Deployment, EvalResult, EvaluationProgress, EvaluationRun,
+                       ValidationStep)
 
 router = APIRouter(tags=["검증·등록·배포"])
 
@@ -178,7 +179,7 @@ class GenieCheckRequest(BaseModel):
 
 
 @router.post(
-    "/no-code/checks", summary="노코드 자가 점검 (Genie 정의 규칙)",
+    "/no-code/checks", summary="노코드 셀프 체크 (Genie 정의 규칙)",
     **command("aops validate", DBX, note="노코드: Gate의 정의 규칙(준수율)을 지금 바로 돌린다. 참고용이며 기록하지 않는다. 서버가 서비스 주체로 정의를 읽으므로 스페이스를 aops 서비스 주체와 공유(편집)해야 한다. 벤치마크는 배포 요청 때."),
 )
 def genie_check(body: GenieCheckRequest, request: Request) -> dict:
@@ -228,6 +229,18 @@ def get_evaluation(validation_run_id: str, request: Request) -> EvaluationRun:
     caller_of(request, svc)
     row = svc.evaluation(validation_run_id, results=True)
     return EvaluationRun(**{**row, "results": [EvalResult(**r) for r in row.pop("results", [])]})
+
+
+@router.get(
+    "/evaluations/{validation_run_id}/progress", summary="평가 진행 상황 (지금 단계·읽는 파일·%·최근 활동)",
+    **command(None, DBX, screen="평가 진행 화면",
+              note="평가 Job이 1초 남짓마다 쓰는 진행 문서(레지스트리 볼륨 aops_runs)를 돌려준다. 경로와 개수만, 파일 내용은 없다. "
+                   "Job이 쓰기 전에는 Job 실행 상태(준비 중 등). 끝나면 status=done이고 결과는 GET /evaluations/{id}"),
+)
+def get_evaluation_progress(validation_run_id: str, request: Request) -> EvaluationProgress:
+    svc = service_for(None)
+    caller_of(request, svc)
+    return EvaluationProgress(**svc.evaluation_progress(validation_run_id))
 
 
 @router.get(
@@ -314,7 +327,7 @@ def list_gates(
     return Page[ReleaseGate](items=[_gate(r) for r in rows], next_cursor=None)
 
 
-@router.get("/release-gates/{gate_id}", summary="배포 심사 보기", **command(None, DBX, screen="console 배포 요청·승인"))
+@router.get("/release-gates/{gate_id}", summary="배포 요청 보기 (평가·승인 진행, 리포트)", **command(None, DBX, screen="console 배포 요청·승인"))
 def get_gate(gate_id: str, request: Request) -> ReleaseGateDetail:
     svc = service_for(None)
     caller = caller_of(request, svc)

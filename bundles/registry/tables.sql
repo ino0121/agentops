@@ -6,6 +6,9 @@
 -- __SCHEMA__ 는 실행할 때 <catalog>.<schema> 로 바뀐다. 다시 실행해도 된다 (IF NOT EXISTS).
 -- 모든 테이블은 catalog commits를 켠다. 여러 테이블을 BEGIN ATOMIC 한 트랜잭션으로 바꾸려면 필요하다.
 -- PRIMARY KEY는 Unity Catalog 정보용 제약이라 강제되지 않는다. 허용 값은 CHECK로 강제한다.
+-- 카탈로그는 미리 있어야 한다(저장 위치는 조직이 정함). 스키마는 없으면 만든다.
+
+CREATE SCHEMA IF NOT EXISTS __SCHEMA__ COMMENT 'aops 레지스트리: 에이전트 버전·평가·배포 심사·승인·배포·정책. 쓰기는 aops 서비스 주체만';
 
 CREATE TABLE IF NOT EXISTS __SCHEMA__.policies (
   policy_version INT NOT NULL COMMENT '정책 버전. 1부터 1씩 늘어난다',

@@ -10,7 +10,7 @@ from functools import lru_cache
 
 from fastapi import Request
 
-from ..dbx.service import Caller, Config, Service
+from ..dbx.service import Caller, Config, Service, ServiceError
 from .common import NotImplementedYet
 
 
@@ -40,18 +40,33 @@ def _same_machine(request: Request) -> bool:
 
 
 def caller_of(request: Request, svc: Service) -> Caller:
-    """Databricks Apps forwards the user's email and token; elsewhere the bearer token tells who it is.
+    """Databricks Apps forwards the user's email and token; elsewhere the bearer token tells who it is, or the
+    browser login of a server outside Apps (server/auth.py, the session cookie's user token).
 
-    A server started on a PC with a Databricks CLI profile (`aops serve` for trying the console) has
-    neither: the browser on that PC is the profile's own user.
+    A server started on a PC with a Databricks CLI profile and no login (`aops serve` for trying the console)
+    has none of these: the browser on that PC is the profile's own user.
     """
     in_apps = bool(os.environ.get("DATABRICKS_APP_NAME"))
     token = request.headers.get("x-forwarded-access-token") if in_apps else None
     if not token:
         auth = request.headers.get("authorization", "")
         token = auth[7:] if auth.lower().startswith("bearer ") else None
+    if not token:
+        token = getattr(getattr(request, "state", None), "session_token", None)  # set only by the login middleware
     email = request.headers.get("x-forwarded-email") if in_apps else None  # only the Apps proxy sets these
-    if not token and not email and svc.config.profile and not in_apps and _same_machine(request):
+    oauth = getattr(getattr(getattr(request, "app", None), "state", None), "oauth", None)
+    if not token and not email and oauth is None and svc.config.profile and not in_apps and _same_machine(request):
         auth = svc.w.config.authenticate().get("Authorization", "")
         token = auth[7:] if auth.lower().startswith("bearer ") else None
+    if not token and not email and oauth is not None:
+        raise ServiceError(401, "login_required", "로그인이 필요합니다", data={"login": "/auth/login"})
     return svc.identify(token, email)
+
+
+def login_kind(request: Request) -> str:
+    """How this request came in: apps (Databricks Apps), oauth (this server's login), token (bearer), local (PC profile)."""
+    if os.environ.get("DATABRICKS_APP_NAME"):
+        return "apps"
+    if request.headers.get("authorization"):
+        return "token"
+    return "oauth" if getattr(getattr(request, "state", None), "session_token", None) else "local"
